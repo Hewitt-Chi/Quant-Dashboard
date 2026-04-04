@@ -154,8 +154,10 @@ git init
 ### Step 3：加入 vcpkg 為 git submodule
 
 ```powershell
-git submodule add https://github.com/microsoft/vcpkg.git vcpkg
-git submodule update --init --recursive
+cd E:/WorkSpace/Quant-Dashboard
+git clone https://github.com/microsoft/vcpkg.git
+cd vcpkg
+bootstrap-vcpkg.bat
 
 # Bootstrap vcpkg（產生 vcpkg.exe）
 .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
