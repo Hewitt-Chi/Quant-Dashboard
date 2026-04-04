@@ -1,0 +1,23 @@
+# 建置輸出
+/build/
+/out/
+
+# vcpkg 安裝目錄（由 manifest 自動還原，不需提交）
+/vcpkg_installed/
+
+# VS2022 CMake 快取與舊格式設定檔
+/.vs/
+/CMakeSettings.json
+
+# 使用者本機 Qt 路徑設定（不同機器路徑不同）
+CMakeUserPresets.json
+
+# 一般 C++/Windows
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.exe
+*.dll
+*.user

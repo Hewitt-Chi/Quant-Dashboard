@@ -1,0 +1,8 @@
+{
+  "name": "my-quantlib-app",
+  "version": "1.0.0",
+  "dependencies": [
+    "quantlib"
+  ],
+  "builtin-baseline": "e80346e570b767219f85dc95e3736853bfec3a70"
+}
