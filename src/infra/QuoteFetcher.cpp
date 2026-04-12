@@ -74,24 +74,25 @@ void QuoteFetcher::fetchHistory(const QString& symbol, const QString& range)
 // ─────────────────────────────────────────────────────────────────────────────
 void QuoteFetcher::fetchYahooQuote(const QString& symbol)
 {
-    // v8 quote endpoint
-    QUrl url(QString("https://query1.finance.yahoo.com/v8/finance/quote"));
+    // 改用 v7 crumb-free endpoint
+    QUrl url(QString("https://query1.finance.yahoo.com/v7/finance/quote"));
     QUrlQuery q;
     q.addQueryItem("symbols", symbol);
-    q.addQueryItem("fields", "regularMarketPrice,regularMarketChange,"
-                             "regularMarketChangePercent,regularMarketVolume");
     url.setQuery(q);
 
     QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::UserAgentHeader,
-                  "Mozilla/5.0 QuantDashboard/1.0");
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+    // Yahoo 需要這個 header 才不會被擋
+    req.setRawHeader("Accept", "application/json");
+    req.setRawHeader("Referer", "https://finance.yahoo.com");
 
     auto* reply = m_nam->get(req);
     reply->setProperty("symbol", symbol);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         parseYahooQuote(reply, reply->property("symbol").toString());
         reply->deleteLater();
-    });
+        });
 }
 
 void QuoteFetcher::parseYahooQuote(QNetworkReply* reply, const QString& symbol)
