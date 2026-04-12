@@ -29,7 +29,7 @@ set(CMAKE_AUTORCC ON)    # 自動處理 .qrc 資源檔
 set(CMAKE_AUTOUIC ON)    # 自動處理 .ui 檔
 
 # 尋找 Qt6（需設定 CMAKE_PREFIX_PATH 或環境變數 Qt6_DIR）
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Charts)
+find_package(Qt6 COMPONENTS Core Widgets Charts Network Sql Concurrent REQUIRED)
 
 # ── Boost（由 vcpkg 管理，缺少時自動安裝）───────────────────────────────────
 #find_package(Boost REQUIRED COMPONENTS date_time math_c99)
@@ -39,30 +39,41 @@ find_package(QuantLib CONFIG REQUIRED)
 
 # ── 原始碼 ────────────────────────────────────────────────────────────────────
 set(SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/QuantMainDlg.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/QuantMainDlg.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/QuantMainDlg.ui
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/QuantMainDlg.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/QuantMainDlg.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/QuantMainDlg.ui
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/AppSettings.cpp     # ← 這四行要加
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/AsyncWorker.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/DatabaseManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/QuoteFetcher.cpp
 )
 
 # ── 建置目標 ──────────────────────────────────────────────────────────────────
-qt_add_executable(QuantLibQT
+qt_add_executable(Quant-Dashboard
     ${SOURCES}
 )
 
-target_link_libraries(QuantLibQT PRIVATE
+target_link_libraries(Quant-Dashboard PRIVATE
     Qt6::Core
     Qt6::Widgets
     Qt6::Charts
+    Qt6::Network      # ← 確認這行存在
+    Qt6::Sql
+    Qt6::Concurrent
     QuantLib::QuantLib
 )
 
+if(MSVC)
+    target_compile_options(Quant-Dashboard PRIVATE /utf-8)
+endif()
+
 find_program(WINDEPLOYQT windeployqt HINTS "${Qt6_DIR}/../../../bin")
 if(WINDEPLOYQT)
-    add_custom_command(TARGET QuantLibQT POST_BUILD
+    add_custom_command(TARGET Quant-Dashboard POST_BUILD
         COMMAND ${WINDEPLOYQT}
             --no-translations
-            "$<TARGET_FILE:QuantLibQT>"
+            "$<TARGET_FILE:Quant-Dashboard>"
         COMMENT "Deploying Qt DLLs..."
     )
 endif()
