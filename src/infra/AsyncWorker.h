@@ -109,6 +109,11 @@ public:
 
     // 是否有工作正在執行
     bool isBusy() const;
+    // 同步計算（UI thread 少量呼叫用，例如畫 Greeks 曲線）
+    static PricingResult staticComputePricing(const PricingRequest& req)
+    {
+        return computePricing(req);
+    }
 
 signals:
     void pricingFinished(const PricingResult& result);

@@ -38,20 +38,30 @@ find_package(Qt6 COMPONENTS Core Widgets Charts Network Sql Concurrent REQUIRED)
 find_package(QuantLib CONFIG REQUIRED)
 
 # ── 原始碼 ────────────────────────────────────────────────────────────────────
-set(SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/QuantMainDlg.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/QuantMainDlg.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/QuantMainDlg.ui
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/AppSettings.cpp     # ← 這四行要加
+# ── Sources ───────────────────────────────────────────────────────────────────
+set(INFRA_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/AppSettings.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/AppSettings.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/AsyncWorker.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/AsyncWorker.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/DatabaseManager.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/DatabaseManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/QuoteFetcher.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/QuoteFetcher.cpp
+)
+
+set(UI_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/QuantMainDlg.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/QuantMainDlg.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/PricerWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/PricerWidget.cpp
 )
 
 # ── 建置目標 ──────────────────────────────────────────────────────────────────
 qt_add_executable(Quant-Dashboard
-    ${SOURCES}
+    src/main.cpp
+    ${INFRA_SOURCES}
+    ${UI_SOURCES}
 )
 
 target_link_libraries(Quant-Dashboard PRIVATE
