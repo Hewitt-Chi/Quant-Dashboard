@@ -84,8 +84,8 @@ void QuoteFetcher::fetchYahooQuote(const QString& symbol)
     req.setHeader(QNetworkRequest::UserAgentHeader,
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
     // Yahoo 需要這個 header 才不會被擋
-    req.setRawHeader("Accept", "application/json");
     req.setRawHeader("Referer", "https://finance.yahoo.com");
+    req.setRawHeader("Accept", "application/json,*/*");
 
     auto* reply = m_nam->get(req);
     reply->setProperty("symbol", symbol);

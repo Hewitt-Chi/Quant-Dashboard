@@ -55,6 +55,11 @@ set(UI_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/QuantMainDlg.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/PricerWidget.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/PricerWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/PricerWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/WatchlistWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/WatchlistWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/BacktestWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/BacktestWidget.cpp
 )
 
 # ¢w¢w «Ø¸m¥Ø¼Ð ¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w

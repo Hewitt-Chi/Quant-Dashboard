@@ -6,6 +6,8 @@ class AsyncWorker;
 class DatabaseManager;
 class QuoteFetcher;
 class PricerWidget;
+class WatchlistWidget;
+class BacktestWidget;
 
 //QT_BEGIN_NAMESPACE
 //namespace Ui { class QuantMainDlg; }
@@ -30,5 +32,7 @@ private:
 
     // ¢w¢w Pages ¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w
     PricerWidget* m_pricer = nullptr;
+    WatchlistWidget* m_watchlist = nullptr;
+    BacktestWidget*  m_backtest  = nullptr;
 };
 
