@@ -4,6 +4,7 @@
 #include "PricerWidget.h"
 #include "WatchlistWidget.h"
 #include "BacktestWidget.h"
+#include "SettingsWidget.h"
 #include "../infra/AppSettings.h"
 #include "../infra/AsyncWorker.h"
 #include "../infra/DatabaseManager.h"
@@ -53,7 +54,13 @@ void QuantMainDlg::setupInfra()
 
     // ── QuoteFetcher ──────────────────────────────────────────────────────────
     m_fetcher = new QuoteFetcher(this);
+
+    if (cfg.quoteProvider() == "polygon") {
+        m_fetcher->setProvider(QuoteFetcher::Provider::Polygon);
+        m_fetcher->setApiKey(cfg.apiKey());
+    } else {
     m_fetcher->setProvider(QuoteFetcher::Provider::Yahoo);
+    }
 
     connect(m_fetcher, &QuoteFetcher::historyReceived,
         [this](const QString& sym, const QVector<OhlcBar>& bars) {
@@ -66,11 +73,38 @@ void QuantMainDlg::setupInfra()
     const QStringList watch = {"SOXX","SMH","QQQI"};
     for (const auto& s : watch) m_fetcher->fetchHistory(s,"1y");
     m_fetcher->startPolling(watch, cfg.quoteRefreshSec());
+   
+    m_fetcher->stopPolling();
+    if (cfg.quoteProvider() == "polygon") {
+        m_fetcher->setProvider(QuoteFetcher::Provider::Polygon);
+        m_fetcher->setApiKey(cfg.apiKey());
+    } else {
+        m_fetcher->setProvider(QuoteFetcher::Provider::Yahoo);
+    }
+    m_fetcher->startPolling(watch, cfg.quoteRefreshSec());
+    statusBar()->showMessage("Settings applied ??polling restarted.", 3000);
 }
-
 // ─────────────────────────────────────────────────────────────────────────────
 // setupUi
 // ─────────────────────────────────────────────────────────────────────────────
+
+void QuantMainDlg::onSettingsChanged()
+{
+    // 重新套用 provider 設定
+    auto& cfg = AppSettings::instance();
+    m_fetcher->stopPolling();
+    if (cfg.quoteProvider() == "polygon") {
+        m_fetcher->setProvider(QuoteFetcher::Provider::Polygon);
+        m_fetcher->setApiKey(cfg.apiKey());
+    }
+    else {
+        m_fetcher->setProvider(QuoteFetcher::Provider::Yahoo);
+    }
+    const QStringList watch = { "SOXX","SMH","QQQI" };
+    m_fetcher->startPolling(watch, cfg.quoteRefreshSec());
+    statusBar()->showMessage("Settings applied — polling restarted.", 3000);
+}
+
 void QuantMainDlg::setupUi()
 {
     auto* nav = new QListWidget(this);
@@ -78,56 +112,72 @@ void QuantMainDlg::setupUi()
     nav->setSpacing(2);
     nav->setFrameShape(QFrame::NoFrame);
     nav->setStyleSheet(
-        "QListWidget { background: palette(window); border-right: 1px solid palette(mid); }"
+        "QListWidget{background:palette(window);border-right:1px solid palette(mid);}"
         "QListWidget::item{padding:9px 14px;border-radius:6px;margin:2px 6px;font-size:13px;}"
         "QListWidget::item:selected{background:palette(highlight);color:palette(highlighted-text);}");
 
-    auto* grpItem1 = new QListWidgetItem("  MARKET",  nav);
-    grpItem1->setFlags(Qt::NoItemFlags);
-    grpItem1->setForeground(QColor(110,110,110));
-    QFont gf; gf.setPointSize(9); grpItem1->setFont(gf);
-    nav->addItem("  Watchlist");
+    QFont gf; gf.setPointSize(9);
 
-    auto* grpItem2 = new QListWidgetItem("  ANALYSIS", nav);
-    grpItem2->setFlags(Qt::NoItemFlags);
-    grpItem2->setForeground(QColor(110,110,110));
-    grpItem2->setFont(gf);
-    nav->addItem("  Option pricer");
+    // ── 加 group 標籤（不可選）────────────────────────────────────────────────
+    auto addGroup = [&](const QString& label) {
+        auto* it = new QListWidgetItem(label, nav);
+        it->setFlags(Qt::NoItemFlags);
+        it->setForeground(QColor(110, 110, 110));
+        it->setFont(gf);
+        it->setData(Qt::UserRole, -1);   // -1 = 不對應任何頁面
+        };
 
-    auto* grpItem3 = new QListWidgetItem("  STRATEGY", nav);
-    grpItem3->setFlags(Qt::NoItemFlags);
-    grpItem3->setForeground(QColor(110,110,110));
-    grpItem3->setFont(gf);
-    nav->addItem("  Backtest");
+    addGroup("  MARKET");       // row 0
+    nav->addItem("  Watchlist");   // row 1
+    addGroup("  ANALYSIS");     // row 2
+    nav->addItem("  Option pricer");// row 3
+    addGroup("  STRATEGY");     // row 4
+    nav->addItem("  Backtest");    // row 5
+    addGroup("  SYSTEM");       // row 6
+    nav->addItem("  Settings");    // row 7
 
     auto* stack = new QStackedWidget(this);
     m_watchlist = new WatchlistWidget(m_fetcher, m_db, this);
-    m_pricer = new PricerWidget(m_worker, this);
+    m_pricer    = new PricerWidget(m_worker, this);
     m_backtest  = new BacktestWidget(m_worker, m_db, this);
-    stack->addWidget(m_watchlist);
-    stack->addWidget(m_pricer);
-    stack->addWidget(m_backtest);
+    m_settings  = new SettingsWidget(this);
+    stack->addWidget(m_watchlist);   // 0
+    stack->addWidget(m_pricer);      // 1
+    stack->addWidget(m_backtest);    // 2
+    stack->addWidget(m_settings);    // 3
 
-    QMap<int,int> rowToPage = {{1,0},{3,1},{5,2}};
+    // row ??page index
+    const QMap<int,int> rowToPage = {{1,0},{3,1},{5,2},{7,3}};
     connect(nav, &QListWidget::currentRowChanged, [stack, rowToPage](int row){
         if (rowToPage.contains(row))
             stack->setCurrentIndex(rowToPage[row]);
-        });
+    });
 
+    // Status bar
+   /* auto connectStatus = [this](QObject* w, const char* sig) {
+        connect(w, sig, this, [this](const QString& m){
+            statusBar()->showMessage(m);
+        });
+        };*/
     connect(m_watchlist, &WatchlistWidget::statusMessage,
             this, [this](const QString& m){ statusBar()->showMessage(m); });
-    connect(m_pricer, &PricerWidget::statusMessage,
+    connect(m_pricer,    &PricerWidget::statusMessage,
             this, [this](const QString& m){ statusBar()->showMessage(m); });
-    connect(m_backtest, &BacktestWidget::statusMessage,
+    connect(m_backtest,  &BacktestWidget::statusMessage,
             this, [this](const QString& m){ statusBar()->showMessage(m); });
+    connect(m_settings,  &SettingsWidget::statusMessage,
+            this, [this](const QString& m){ statusBar()->showMessage(m); });
+    connect(m_settings,  &SettingsWidget::settingsChanged,
+            this, &QuantMainDlg::onSettingsChanged);
 
-    nav->setCurrentRow(1);
+    //nav->setCurrentRow(1);
+    nav->setCurrentItem(nav->item(1));
 
     auto* splitter = new QSplitter(Qt::Horizontal, this);
     splitter->addWidget(nav);
     splitter->addWidget(stack);
-    splitter->setStretchFactor(0, 0);
-    splitter->setStretchFactor(1, 1);
+    splitter->setStretchFactor(0,0);
+    splitter->setStretchFactor(1,1);
     splitter->handle(1)->setEnabled(false);
     setCentralWidget(splitter);
 
@@ -136,4 +186,3 @@ void QuantMainDlg::setupUi()
     statusBar()->addPermanentWidget(dbLbl);
     statusBar()->showMessage("Ready", 2000);
 }
-

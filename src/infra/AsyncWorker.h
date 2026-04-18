@@ -1,7 +1,7 @@
 #pragma once
 #include <QObject>
 #include <QFuture>
-#include <QtConcurrent/QtConcurrent>
+#include <QtConcurrent>
 #include <functional>
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -68,16 +68,18 @@ struct BacktestRequest
 
 struct BacktestResult
 {
-    bool   success = false;
+    bool    success = false;
     QString errorMsg;
 
-    QVector<double> portfolioValues;  // 每期組合淨值
-    QVector<double> buyHoldValues;   // 原始 Buy & Hold 淨值
-    QVector<double> premiumPerTrade; // 每筆 call 的實際 premium
-    double totalReturn  = 0.0;
-    double sharpeRatio  = 0.0;
-    double maxDrawdown  = 0.0;
-    double premiumCollected = 0.0;    // 累計 premium
+    QVector<double> portfolioValues;  // Covered call 每期組合淨值
+    QVector<double> buyHoldValues;    // Buy & Hold 每期市值（原始收盤）
+    QVector<double> premiumPerTrade;  // 每次賣 call 的實際 premium
+    QVector<int>    assignmentEvents; // 被 assigned 的 bar index
+
+    double totalReturn      = 0.0;
+    double sharpeRatio      = 0.0;
+    double maxDrawdown      = 0.0;
+    double premiumCollected = 0.0;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -111,11 +113,10 @@ public:
 
     // 是否有工作正在執行
     bool isBusy() const;
+
     // 同步計算（UI thread 少量呼叫用，例如畫 Greeks 曲線）
     static PricingResult staticComputePricing(const PricingRequest& req)
-    {
-        return computePricing(req);
-    }
+    { return computePricing(req); }
 
 signals:
     void pricingFinished(const PricingResult& result);

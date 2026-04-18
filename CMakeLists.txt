@@ -21,6 +21,9 @@ endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
+set(CMAKE_AUTOUIC ON)
 
 # ── Qt 設定 ───────────────────────────────────────────────────────────────────
 # 啟用 Qt 自動化工具
@@ -60,6 +63,8 @@ set(UI_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/WatchlistWidget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/BacktestWidget.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/BacktestWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/SettingsWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/SettingsWidget.cpp
 )
 
 # ── 建置目標 ──────────────────────────────────────────────────────────────────

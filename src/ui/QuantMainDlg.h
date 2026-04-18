@@ -8,6 +8,7 @@ class QuoteFetcher;
 class PricerWidget;
 class WatchlistWidget;
 class BacktestWidget;
+class SettingsWidget;
 
 //QT_BEGIN_NAMESPACE
 //namespace Ui { class QuantMainDlg; }
@@ -16,6 +17,9 @@ class BacktestWidget;
 class QuantMainDlg : public QMainWindow
 {
     Q_OBJECT
+
+private slots:
+    void onSettingsChanged();
 
 public:
     explicit QuantMainDlg(QWidget *parent = nullptr);
@@ -34,5 +38,6 @@ private:
     PricerWidget* m_pricer = nullptr;
     WatchlistWidget* m_watchlist = nullptr;
     BacktestWidget*  m_backtest  = nullptr;
+    SettingsWidget*  m_settings  = nullptr;
 };
 

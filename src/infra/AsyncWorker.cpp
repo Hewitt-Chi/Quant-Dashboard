@@ -178,19 +178,40 @@ BacktestResult AsyncWorker::computeBacktest(BacktestRequest req,
         const int n = req.closePrices.size();
         result.portfolioValues.reserve(n);
 
-        double portfolio  = req.closePrices.first(); // 初始持股
-        double premium    = 0.0;
-        double peakValue  = portfolio;
-        double maxDD      = 0.0;
-        int    nextExpiry = req.dteDays;             // 下次 call 到期的 index
+        double cashBalance = 0.0;    // 現金（premium + assignment 所得）
+        double shares      = 1.0;    // 持股數量
+        double openStrike  = 0.0;    // 未平倉 call 的 strike
+        bool   hasOpenCall = false;
+        double peakValue   = req.closePrices.first();
+        double maxDD       = 0.0;
+        int    nextExpiry  = req.dteDays;
 
         for (int i = 0; i < n; ++i) {
             double spot = req.closePrices[i];
 
-            // ── 每隔 dteDays 賣出一次 covered call ───────────────────────────
-            if (i == nextExpiry) {
+            // ── 到期日：處理 assignment 或 expire worthless ───────────────────
+            if (i == nextExpiry && hasOpenCall) {
+                if (spot > openStrike) {
+                    // Assigned：股票以 strike 賣出
+                    cashBalance += shares * openStrike;
+                    shares       = 0.0;
+                    // 以市價買回 1 股繼續持有（roll，放棄 spot-strike 上漲）
+                    double cost = spot;
+                    if (cashBalance >= cost) {
+                        cashBalance -= cost;
+                        shares       = 1.0;
+                    } else {
+                        shares      = cashBalance / spot;
+                        cashBalance = 0.0;
+                    }
+                    result.assignmentEvents.append(i);
+                }
+                hasOpenCall = false;
+            }
+
+            // ── 賣出新的 covered call ─────────────────────────────────────────
+            if (i == nextExpiry && shares > 0.0) {
                 double strike = spot * (1.0 + req.strikeOffsetPct);
-                double T      = req.dteDays / 365.0;
 
                 Handle<Quote>              sH(boost::make_shared<SimpleQuote>(spot));
                 Handle<YieldTermStructure> rH(
@@ -201,32 +222,32 @@ BacktestResult AsyncWorker::computeBacktest(BacktestRequest req,
                     boost::make_shared<BlackConstantVol>(today, cal, req.impliedVol, dc));
 
                 auto process = boost::make_shared<BlackScholesMertonProcess>(sH, dH, rH, vH);
-                Date expiry  = today + req.dteDays;
+                Date exDate  = today + req.dteDays;
                 auto payoff  = boost::make_shared<PlainVanillaPayoff>(Option::Call, strike);
-                auto exer    = boost::make_shared<EuropeanExercise>(expiry);
+                auto exer    = boost::make_shared<EuropeanExercise>(exDate);
                 VanillaOption call(payoff, exer);
                 call.setPricingEngine(
                     boost::make_shared<AnalyticEuropeanEngine>(process));
 
-                double callPremium = call.NPV();
-                premium           += callPremium;
-                portfolio         += callPremium;   // 收到 premium
-                result.premiumPerTrade.append(callPremium);  // ← 加在這裡
-                nextExpiry        += req.dteDays;
+                double callPremium = call.NPV() * shares;
+                cashBalance  += callPremium;
+                openStrike    = strike;
+                hasOpenCall   = true;
+                result.premiumPerTrade.append(callPremium);
+                nextExpiry   += req.dteDays;
             }
 
-            // ── Portfolio value = 持股市值 ────────────────────────────────────
-            // （此骨架假設持有 1 股，不考慮被 assigned 的情況，可自行擴充）
-            double value = spot + (premium);
+            // ── Portfolio value = 持股市值 + 現金 ────────────────────────────
+            double value = shares * spot + cashBalance;
             result.portfolioValues.append(value);
-            result.buyHoldValues.append(spot);  // B&H = 純持股市值
+            result.buyHoldValues.append(spot);
 
-            // ── Max drawdown 計算 ─────────────────────────────────────────────
+            // ── Max drawdown ──────────────────────────────────────────────────
             peakValue = qMax(peakValue, value);
             double dd = (peakValue - value) / peakValue;
             maxDD     = qMax(maxDD, dd);
 
-            // ── 進度回報（透過 invokeMethod 跨執行緒）────────────────────────
+            // ── 進度回報 ──────────────────────────────────────────────────────
             if (i % (n / 20 + 1) == 0) {
                 int pct = static_cast<int>(100.0 * i / n);
                 QMetaObject::invokeMethod(self, "progressUpdated",
@@ -237,7 +258,10 @@ BacktestResult AsyncWorker::computeBacktest(BacktestRequest req,
 
         // ── 統計指標 ─────────────────────────────────────────────────────────
         result.maxDrawdown       = maxDD;
-        result.premiumCollected  = premium;
+        // premiumCollected = 所有 premiumPerTrade 的總和
+        double totalPremium = 0.0;
+        for (double p : result.premiumPerTrade) totalPremium += p;
+        result.premiumCollected = totalPremium;
         result.totalReturn       = (result.portfolioValues.last()
                                    - result.portfolioValues.first())
                                    / result.portfolioValues.first();
