@@ -13,6 +13,7 @@
 #include <QProgressBar>
 #include <QTableWidget>
 #include <QTableWidgetItem>
+#include <QColor>
 #include <QHeaderView>
 #include <QSplitter>
 #include <QDateTime>
@@ -332,70 +333,88 @@ void BacktestWidget::onBacktestFinished(const BacktestResult& result)
 
     // ── PnL 圖表 ──────────────────────────────────────────────────────────────
     const auto& vals = result.portfolioValues;
+    const auto& bhVals = result.buyHoldValues;
     QVector<QPointF> ccPts, bhPts;
     ccPts.reserve(vals.size());
     bhPts.reserve(vals.size());
 
-    double init = vals.isEmpty() ? 1.0 : vals.first();
-    // Buy & Hold：從 DB 讀原始收盤，需要從 request 裡拿
-    // 這裡簡化：用 portfolio 第一個值 * (close/close[0]) 模擬 B&H
-    // 實際上 BacktestResult 可以擴充存 closes，這裡用近似值
     for (int i = 0; i < vals.size(); ++i) {
         ccPts.append({static_cast<double>(i), vals[i]});
-        // B&H 近似：假設 portfolio 第一筆是持股市值
-        if (i < result.buyHoldValues.size())
-            bhPts.append({ static_cast<double>(i), result.buyHoldValues[i] });
+        if (i < bhVals.size())
+            bhPts.append({static_cast<double>(i), bhVals[i]});
     }
 
     m_seriesCC->replace(ccPts);
     m_seriesBH->replace(bhPts);
 
-    // 更新軸範圍
+    // 軸範圍：取 CC + BH 兩條線的合併 min/max
     auto axX = m_chart->axes(Qt::Horizontal);
     auto axY = m_chart->axes(Qt::Vertical);
     if (!axX.isEmpty())
         qobject_cast<QValueAxis*>(axX.first())
             ->setRange(0, vals.size()-1);
     if (!axY.isEmpty()) {
-        double yMin = *std::min_element(vals.begin(), vals.end());
-        double yMax = *std::max_element(vals.begin(), vals.end());
+        double yMin = vals.isEmpty() ? 0 : *std::min_element(vals.begin(), vals.end());
+        double yMax = vals.isEmpty() ? 1 : *std::max_element(vals.begin(), vals.end());
+        if (!bhVals.isEmpty()) {
+            yMin = qMin(yMin, *std::min_element(bhVals.begin(), bhVals.end()));
+            yMax = qMax(yMax, *std::max_element(bhVals.begin(), bhVals.end()));
+        }
         double margin = (yMax-yMin)*0.08;
         qobject_cast<QValueAxis*>(axY.first())
             ->setRange(yMin-margin, yMax+margin);
     }
 
-    // ── 補充 Trade Log（每隔 DTE 天一筆）────────────────────────────────────
+    // ── Trade Log（使用真實 per-trade premium + assignment 標記）────────────
     m_tradeLog->clearContents();
     m_tradeLog->setRowCount(0);
 
-    int dte = m_dte->value();
-    int trades = vals.size() / dte;
+    int dte    = m_dte->value();
+    int trades = result.premiumPerTrade.size();
     for (int i = 0; i < qMin(trades, 200); ++i) {
-        int   day  = i * dte;
-        double spot   = (day < vals.size()) ? vals[day] : 0;
-        double strike = spot * (1.0 + m_strikeOff->value());
-        double prem = (i < result.premiumPerTrade.size())
-            ? result.premiumPerTrade[i]
-            : 0.0;
+        int    day    = i * dte;
+        double bh     = (day < bhVals.size()) ? bhVals[day] : 0.0;
+        double strike = bh * (1.0 + m_strikeOff->value());
+        double prem   = result.premiumPerTrade[i];
+        bool   assigned = result.assignmentEvents.contains(day + dte);
 
         int row = m_tradeLog->rowCount();
         m_tradeLog->insertRow(row);
-        auto set = [&](int col, const QString& txt) {
+
+        auto set = [&](int col, const QString& txt,
+                       Qt::Alignment a = Qt::AlignCenter) {
             auto* it = new QTableWidgetItem(txt);
-            it->setTextAlignment(Qt::AlignCenter|Qt::AlignVCenter);
+            it->setTextAlignment(a | Qt::AlignVCenter);
             m_tradeLog->setItem(row, col, it);
         };
         set(0, QString::number(day));
-        set(1, QString::number(spot,  'f',2));
-        set(2, QString::number(strike,'f',2));
-        set(3, QString::number(prem,  'f',4));
+        set(1, QString::number(bh,    'f', 2));
+        set(2, QString::number(strike,'f', 2));
+        set(3, QString::number(prem,  'f', 4));
+
+        // Assignment 行標紅色背景
+        if (assigned) {
+            for (int c = 0; c < 4; ++c) {
+                if (auto* it = m_tradeLog->item(row, c)) {
+                    it->setBackground(QColor("#3f1515"));
+                    it->setForeground(QColor("#fca5a5"));
+                }
+            }
+        }
     }
 
+    // assignment 次數摘要
+    int assignCount = result.assignmentEvents.size();
+    QString assignStr = assignCount > 0
+        ? QString("  ·  Assigned %1×").arg(assignCount)
+        : "  ·  No assignments";
+
     emit statusMessage(
-        QString("Backtest done — Return: %1%  Sharpe: %2  MaxDD: %3%")
+        QString("Backtest done — Return: %1%  Sharpe: %2  MaxDD: %3%%4")
         .arg(ret,0,'f',2)
         .arg(result.sharpeRatio,0,'f',3)
-        .arg(dd,0,'f',2));
+        .arg(dd,0,'f',2)
+        .arg(assignStr));
 }
 
 void BacktestWidget::onProgressUpdated(int pct)
