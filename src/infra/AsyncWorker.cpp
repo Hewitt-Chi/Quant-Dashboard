@@ -211,6 +211,7 @@ BacktestResult AsyncWorker::computeBacktest(BacktestRequest req,
                 double callPremium = call.NPV();
                 premium           += callPremium;
                 portfolio         += callPremium;   // 收到 premium
+                result.premiumPerTrade.append(callPremium);  // ← 加在這裡
                 nextExpiry        += req.dteDays;
             }
 
@@ -218,6 +219,7 @@ BacktestResult AsyncWorker::computeBacktest(BacktestRequest req,
             // （此骨架假設持有 1 股，不考慮被 assigned 的情況，可自行擴充）
             double value = spot + (premium);
             result.portfolioValues.append(value);
+            result.buyHoldValues.append(spot);  // B&H = 純持股市值
 
             // ── Max drawdown 計算 ─────────────────────────────────────────────
             peakValue = qMax(peakValue, value);

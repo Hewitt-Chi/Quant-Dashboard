@@ -72,6 +72,8 @@ struct BacktestResult
     QString errorMsg;
 
     QVector<double> portfolioValues;  // 每期組合淨值
+    QVector<double> buyHoldValues;   // 原始 Buy & Hold 淨值
+    QVector<double> premiumPerTrade; // 每筆 call 的實際 premium
     double totalReturn  = 0.0;
     double sharpeRatio  = 0.0;
     double maxDrawdown  = 0.0;
