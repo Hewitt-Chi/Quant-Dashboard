@@ -70,29 +70,37 @@ void QuoteFetcher::fetchHistory(const QString& symbol, const QString& range)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Yahoo Finance — 即時報價
-// 使用非官方但穩定的 v7 endpoint（免 key，適合開發）
+//
+// v8/finance/quote 的 JSON 欄位被 Yahoo 包進 "body" 結構，直接抓常被回空值。
+// 改用 chart endpoint（range=5d interval=1d）取最近兩根 K 線算漲跌，
+// 這個 endpoint 不需要 cookie / crumb，穩定可靠。
 // ─────────────────────────────────────────────────────────────────────────────
 void QuoteFetcher::fetchYahooQuote(const QString& symbol)
 {
-    // 改用 v7 crumb-free endpoint
-    QUrl url(QString("https://query1.finance.yahoo.com/v7/finance/quote"));
+    QUrl url(QString("https://query1.finance.yahoo.com/v8/finance/chart/%1")
+             .arg(symbol));
     QUrlQuery q;
-    q.addQueryItem("symbols", symbol);
+    q.addQueryItem("range",    "5d");
+    q.addQueryItem("interval", "1d");
     url.setQuery(q);
 
     QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::UserAgentHeader,
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
-    // Yahoo 需要這個 header 才不會被擋
-    req.setRawHeader("Referer", "https://finance.yahoo.com");
-    req.setRawHeader("Accept", "application/json,*/*");
+                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                  "AppleWebKit/537.36 Chrome/120.0 Safari/537.36");
+    req.setRawHeader("Accept",          "application/json");
+    req.setRawHeader("Accept-Language", "en-US,en;q=0.9");
+    req.setRawHeader("Referer",         "https://finance.yahoo.com/");
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                     QNetworkRequest::NoLessSafeRedirectPolicy);
 
     auto* reply = m_nam->get(req);
-    reply->setProperty("symbol", symbol);
+    reply->setProperty("symbol",   symbol);
+    reply->setProperty("quoteMode", true);   // 標記：這是即時報價請求
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         parseYahooQuote(reply, reply->property("symbol").toString());
         reply->deleteLater();
-        });
+    });
 }
 
 void QuoteFetcher::parseYahooQuote(QNetworkReply* reply, const QString& symbol)
@@ -103,22 +111,77 @@ void QuoteFetcher::parseYahooQuote(QNetworkReply* reply, const QString& symbol)
     }
 
     const QByteArray raw = reply->readAll();
-    const auto doc = QJsonDocument::fromJson(raw);
-
-    // 路徑：quoteResponse.result[0]
-    const QJsonArray result = doc["quoteResponse"]["result"].toArray();
-    if (result.isEmpty()) {
-        emit fetchError(symbol, "Empty quote response");
+    if (raw.isEmpty()) {
+        emit fetchError(symbol, "Empty response from Yahoo");
         return;
     }
 
-    const QJsonObject obj = result.first().toObject();
+    const auto doc = QJsonDocument::fromJson(raw);
+    if (doc.isNull()) {
+        emit fetchError(symbol, "Invalid JSON from Yahoo");
+        return;
+    }
+
+    // chart.result[0] 路徑
+    const QJsonObject result0 = doc["chart"]["result"].toArray()
+                                    .first().toObject();
+    if (result0.isEmpty()) {
+        // 嘗試讀取 error 訊息
+        QString err = doc["chart"]["error"]["description"].toString();
+        emit fetchError(symbol, err.isEmpty() ? "No chart data" : err);
+        return;
+    }
+
+    // 取最後一根 K 線
+    const QJsonObject meta   = result0["meta"].toObject();
+    const QJsonObject quote0 = result0["indicators"]["quote"]
+                                       .toArray().first().toObject();
+    const QJsonArray closes  = quote0["close"].toArray();
+    const QJsonArray volumes = quote0["volume"].toArray();
+
+    if (closes.isEmpty()) {
+        emit fetchError(symbol, "No close data");
+        return;
+    }
+
+    // 找最後一個非 null 的收盤價
+    double lastClose = 0.0;
+    int    lastIdx   = -1;
+    for (int i = closes.size()-1; i >= 0; --i) {
+        if (!closes[i].isNull()) {
+            lastClose = closes[i].toDouble();
+            lastIdx   = i;
+            break;
+        }
+    }
+    if (lastIdx < 0) {
+        emit fetchError(symbol, "All close values are null");
+        return;
+    }
+
+    // 前一根收盤（算漲跌）
+    double prevClose = lastClose;
+    for (int i = lastIdx-1; i >= 0; --i) {
+        if (!closes[i].isNull()) {
+            prevClose = closes[i].toDouble();
+            break;
+        }
+    }
+
+    qint64 vol = 0;
+    if (lastIdx < volumes.size() && !volumes[lastIdx].isNull())
+        vol = static_cast<qint64>(volumes[lastIdx].toDouble());
+
+    // meta 也有 regularMarketPrice（盤中即時，比 K 線更新）
+    double metaPrice = meta["regularMarketPrice"].toDouble();
+    if (metaPrice > 0.0) lastClose = metaPrice;
+
     Quote q;
     q.symbol    = symbol;
-    q.price     = obj["regularMarketPrice"].toDouble();
-    q.change    = obj["regularMarketChange"].toDouble();
-    q.changePct = obj["regularMarketChangePercent"].toDouble();
-    q.volume    = static_cast<qint64>(obj["regularMarketVolume"].toDouble());
+    q.price     = lastClose;
+    q.change    = lastClose - prevClose;
+    q.changePct = prevClose > 0 ? (lastClose - prevClose) / prevClose * 100.0 : 0.0;
+    q.volume    = vol;
     q.timestamp = QDateTime::currentDateTime();
 
     emit quoteReceived(q);
