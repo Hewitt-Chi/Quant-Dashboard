@@ -1,6 +1,7 @@
 #pragma once
 #include <QWidget>
 #include <QVector>
+#include <QtCharts/QChartView>
 #include "../infra/AsyncWorker.h"
 
 QT_BEGIN_NAMESPACE
@@ -11,6 +12,9 @@ class QLabel;
 class QPushButton;
 class QTableWidget;
 class QButtonGroup;
+class QTabWidget;
+class QGraphicsLineItem;
+class QGraphicsSimpleTextItem;
 QT_END_NAMESPACE
 
 class QChart;
@@ -19,7 +23,7 @@ class QChartView;
 class QValueAxis;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ResultCard  —  單一 Greek 值的顯示卡片
+// ResultCard
 // ─────────────────────────────────────────────────────────────────────────────
 class ResultCard : public QWidget
 {
@@ -27,25 +31,44 @@ class ResultCard : public QWidget
 public:
     explicit ResultCard(const QString& label, QWidget* parent = nullptr);
     void setValue(double v, int decimals = 4);
-    void setHighlight(bool red);   // Theta 用紅色，Price 用藍色
+    void setColor(const QString& hex);   // 設定數值顏色
     void clear();
-
 private:
     QLabel* m_label = nullptr;
     QLabel* m_value = nullptr;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PricerWidget  —  Option Pricer 主頁面
-//
-// 佈局：
-//   ┌─ 上半：輸入表單 + Greeks 結果卡 ─────────────────┐
-//   │  [Spot] [Strike] [Maturity] [σ] [r] [Model] [Type]│
-//   │  [Calculate]                                       │
-//   │  Price  Delta  Gamma  Vega  Theta  Rho             │
-//   ├─ 下半：Greeks 曲線圖 + 歷史計算記錄 ─────────────┤
-//   │  [Delta vs Spot chart]  |  [Recent table]          │
-//   └────────────────────────────────────────────────────┘
+// CrosshairChartView  —  帶十字準線 + Tooltip 的 QChartView
+// ─────────────────────────────────────────────────────────────────────────────
+class CrosshairChartView : public QChartView
+{
+    Q_OBJECT
+public:
+    explicit CrosshairChartView(QChart* chart, QWidget* parent = nullptr);
+
+    // 設定 Y 值的精度與單位（例如 Gamma 需要 6 位，Theta 顯示負號）
+    void setYFormat(int decimals, const QString& unit = "");
+
+protected:
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void leaveEvent(QEvent* event) override;
+
+private:
+    void updateCrosshair(const QPointF& scenePos);
+    void hideCrosshair();
+
+    QGraphicsLineItem*       m_vLine   = nullptr;
+    QGraphicsLineItem*       m_hLine   = nullptr;
+    QGraphicsSimpleTextItem* m_tooltip = nullptr;
+    QGraphicsSimpleTextItem* m_bgRect  = nullptr;   // tooltip 背景（用矩形模擬）
+
+    int     m_decimals = 4;
+    QString m_unit;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PricerWidget
 // ─────────────────────────────────────────────────────────────────────────────
 class PricerWidget : public QWidget
 {
@@ -55,55 +78,58 @@ public:
     explicit PricerWidget(AsyncWorker* worker, QWidget* parent = nullptr);
 
 signals:
-    void statusMessage(const QString& msg);   // 傳給 MainWindow status bar
+    void statusMessage(const QString& msg);
 
 private slots:
     void onCalculate();
     void onPricingFinished(const PricingResult& result);
     void onModelChanged(int index);
+    void onGreekSelectorChanged(int index);
+    void onTabChanged(int index);
 
 private:
-    // ── Build helpers ─────────────────────────────────────────────────────────
-    QWidget*  buildInputPanel();
-    QWidget*  buildResultCards();
-    QWidget*  buildGreeksChart();
-    QWidget*  buildHistoryTable();
+    QWidget* buildInputPanel();
+    QWidget* buildResultCards();
+    QWidget* buildChartTabs();
+    QWidget* buildHistoryTable();
 
-    // ── Greeks chart ──────────────────────────────────────────────────────────
-    void updateDeltaChart();   // 畫 Delta vs Spot 曲線
+    QWidget* buildGreekVsSpotTab();
+    QWidget* buildVolSmileTab();
+    QWidget* buildModelCompareTab();
 
-    // ── History table ─────────────────────────────────────────────────────────
+    void updateGreekVsSpot();
+    void updateVolSmile();
+    void updateModelCompare();
+
     void addHistoryRow(const PricingRequest& req, const PricingResult& res);
-
-    // ── 從 UI 讀取當前請求參數 ────────────────────────────────────────────────
     PricingRequest currentRequest() const;
-
-    // ── 套用/移除 loading 狀態 ────────────────────────────────────────────────
     void setLoading(bool on);
+    double computeGreek(int greekIdx, double spot, const PricingRequest& base);
 
-    // ── Worker 引用（不擁有，由 MainWindow 管理生命週期）─────────────────────
+    // Y 軸動態精度：根據數值範圍決定小數位數
+    static int autoDecimals(double rangeMin, double rangeMax);
+
     AsyncWorker* m_worker = nullptr;
 
-    // ── 輸入控件 ──────────────────────────────────────────────────────────────
-    QDoubleSpinBox* m_spot       = nullptr;
-    QDoubleSpinBox* m_strike     = nullptr;
-    QDoubleSpinBox* m_vol        = nullptr;
-    QDoubleSpinBox* m_rate       = nullptr;
-    QDoubleSpinBox* m_div        = nullptr;
-    QSpinBox*       m_maturity   = nullptr;   // 天數
-    QComboBox*      m_model      = nullptr;
-    QButtonGroup*   m_typeGroup  = nullptr;   // Call / Put toggle
-    QPushButton*    m_calcBtn    = nullptr;
+    // ── Input ─────────────────────────────────────────────────────────────────
+    QDoubleSpinBox* m_spot     = nullptr;
+    QDoubleSpinBox* m_strike   = nullptr;
+    QDoubleSpinBox* m_vol      = nullptr;
+    QDoubleSpinBox* m_rate     = nullptr;
+    QDoubleSpinBox* m_div      = nullptr;
+    QSpinBox*       m_maturity = nullptr;
+    QComboBox*      m_model    = nullptr;
+    QButtonGroup*   m_typeGroup= nullptr;
+    QPushButton*    m_calcBtn  = nullptr;
 
-    // Heston 額外參數（model == Heston 時才顯示）
     QWidget*        m_hestonPanel = nullptr;
-    QDoubleSpinBox* m_v0          = nullptr;
-    QDoubleSpinBox* m_kappa       = nullptr;
-    QDoubleSpinBox* m_thetaH      = nullptr;
-    QDoubleSpinBox* m_sigmaH      = nullptr;
-    QDoubleSpinBox* m_rhoH        = nullptr;
+    QDoubleSpinBox* m_v0      = nullptr;
+    QDoubleSpinBox* m_kappa   = nullptr;
+    QDoubleSpinBox* m_thetaH  = nullptr;
+    QDoubleSpinBox* m_sigmaH  = nullptr;
+    QDoubleSpinBox* m_rhoH    = nullptr;
 
-    // ── 結果卡 ────────────────────────────────────────────────────────────────
+    // ── Result cards ──────────────────────────────────────────────────────────
     ResultCard* m_cardPrice = nullptr;
     ResultCard* m_cardDelta = nullptr;
     ResultCard* m_cardGamma = nullptr;
@@ -111,15 +137,31 @@ private:
     ResultCard* m_cardTheta = nullptr;
     ResultCard* m_cardRho   = nullptr;
 
-    // ── Greeks Chart ─────────────────────────────────────────────────────────
-    QChart* m_chart = nullptr;
-    QChartView* m_chartView = nullptr;
-    QLineSeries* m_deltaSeries = nullptr;
+    // ── Tabs ──────────────────────────────────────────────────────────────────
+    QTabWidget*          m_tabWidget     = nullptr;
+    QComboBox*           m_greekSelector = nullptr;
 
-    // ── History table ─────────────────────────────────────────────────────────
+    // Tab 1
+    QChart*              m_greekChart    = nullptr;
+    CrosshairChartView*  m_greekView     = nullptr;
+    QLineSeries*         m_greekSeries   = nullptr;
+
+    // Tab 2
+    QChart*              m_smileChart    = nullptr;
+    CrosshairChartView*  m_smileView     = nullptr;
+    QLineSeries*         m_smileSeriesC  = nullptr;
+    QLineSeries*         m_smileSeriesP  = nullptr;
+
+    // Tab 3
+    QChart*              m_compareChart  = nullptr;
+    CrosshairChartView*  m_compareView   = nullptr;
+    QLineSeries*         m_compareBSM    = nullptr;
+    QLineSeries*         m_compareHeston = nullptr;
+
+    // ── History ───────────────────────────────────────────────────────────────
     QTableWidget* m_historyTable = nullptr;
 
-    // 上一次計算結果（用於更新圖表）
-    PricingResult m_lastResult;
+    PricingResult  m_lastResult;
     PricingRequest m_lastRequest;
+    bool           m_hasResult = false;
 };
