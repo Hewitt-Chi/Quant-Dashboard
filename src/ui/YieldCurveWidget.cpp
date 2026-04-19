@@ -85,6 +85,8 @@ YieldCurveWidget::YieldCurveWidget(AsyncWorker* worker, QWidget* parent)
 
     root->addWidget(buildInputPanel());
 
+    root->addWidget(buildScenarioPanel());
+
     auto* splitter = new QSplitter(Qt::Horizontal, this);
     splitter->addWidget(buildChartTabs());
     splitter->addWidget(buildDataTable());
@@ -94,6 +96,10 @@ YieldCurveWidget::YieldCurveWidget(AsyncWorker* worker, QWidget* parent)
 
     connect(m_worker, &AsyncWorker::yieldCurveFinished,
             this, &YieldCurveWidget::onYieldCurveFinished);
+
+    // 初始化 scenario series
+    m_scenSpot1 = m_scenSpot2 = m_scenSpot3 = nullptr;
+    m_scenCount = 0;
 
     // 套用預設場景並立即計算
     onPresetChanged(0);
@@ -292,6 +298,7 @@ void YieldCurveWidget::onYieldCurveFinished(const YieldCurveResult& result)
 
     updateCharts(result);
     updateTable(result);
+    if (m_applyShiftBtn) m_applyShiftBtn->setEnabled(true);
 
     // Status bar: 顯示關鍵點
     double maxT = result.maturitiesYears.last();
@@ -444,4 +451,165 @@ void YieldCurveWidget::onExportCsv()
     file.close();
 
     emit statusMessage(QString("Exported %1 data points to: %2").arg(n).arg(path));
+}
+
+// =============================================================================
+// buildScenarioPanel — 情境分析（平移 / 扭轉 / 蝶形）
+// =============================================================================
+QWidget* YieldCurveWidget::buildScenarioPanel()
+{
+    auto* box  = new QGroupBox("Scenario analysis", this);
+    auto* grid = new QGridLayout(box);
+    grid->setHorizontalSpacing(10); grid->setVerticalSpacing(6);
+    grid->setContentsMargins(12,10,12,10);
+
+    auto makeSpin = [&](const QString& lbl, double v, int row, int col) -> QDoubleSpinBox* {
+        grid->addWidget(new QLabel(lbl, box), row, col*2);
+        auto* s = new QDoubleSpinBox(box);
+        s->setRange(-500, 500); s->setValue(v);
+        s->setSingleStep(5); s->setDecimals(0); s->setSuffix(" bps");
+        s->setMinimumWidth(110);
+        grid->addWidget(s, row, col*2+1);
+        return s;
+    };
+
+    // Row 0：平移
+    grid->addWidget(new QLabel("<b>Parallel shift</b>", box), 0, 0, 1, 2);
+    m_parallelShift = makeSpin("All tenors:", 25, 1, 0);
+
+    // Row 2：扭轉
+    grid->addWidget(new QLabel("<b>Twist (steepen/flatten)</b>", box), 2, 0, 1, 4);
+    m_twistShort = makeSpin("Short end:",  50, 3, 0);
+    m_twistLong  = makeSpin("Long end:",  -25, 3, 1);
+
+    // Row 4：蝶形
+    grid->addWidget(new QLabel("<b>Butterfly</b>", box), 4, 0, 1, 4);
+    m_butterflyMid = makeSpin("Mid-curve:",  30, 5, 0);
+
+    grid->setColumnStretch(4, 1);
+
+    m_applyShiftBtn = new QPushButton("Add scenario curve", box);
+    m_applyShiftBtn->setMinimumHeight(32); m_applyShiftBtn->setMinimumWidth(160);
+    m_applyShiftBtn->setStyleSheet(
+        "QPushButton{background:#7c3aed;color:white;border-radius:6px;font-weight:500;}"
+        "QPushButton:hover{background:#6d28d9;}"
+        "QPushButton:disabled{background:#475569;}");
+    m_applyShiftBtn->setEnabled(false);  // 需先計算基準曲線
+    grid->addWidget(m_applyShiftBtn, 5, 3);
+    connect(m_applyShiftBtn, &QPushButton::clicked,
+            this, &YieldCurveWidget::onApplyShift);
+
+    auto* clearBtn = new QPushButton("Clear scenarios", box);
+    clearBtn->setMinimumHeight(32);
+    clearBtn->setStyleSheet(
+        "QPushButton{border:0.5px solid palette(mid);border-radius:6px;padding:0 10px;}"
+        "QPushButton:hover{background:palette(midlight);}");
+    connect(clearBtn, &QPushButton::clicked, [this]{
+        for (auto* s : {m_scenSpot1, m_scenSpot2, m_scenSpot3}) {
+            if (s) s->clear();
+        }
+        m_scenCount = 0;
+        emit statusMessage("Scenario curves cleared.");
+    });
+    grid->addWidget(clearBtn, 5, 4);
+
+    auto* hint = new QLabel(
+        "Shifts are in basis points (1 bps = 0.01%).  Max 3 scenario curves.", box);
+    hint->setStyleSheet("font-size:10px;color:rgba(150,150,150,0.6);");
+    grid->addWidget(hint, 6, 0, 1, 5);
+
+    return box;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+void YieldCurveWidget::onApplyShift()
+{
+    if (!m_lastResult.success || m_lastResult.maturitiesYears.isEmpty()) return;
+    if (m_scenCount >= 3) {
+        emit statusMessage("Maximum 3 scenario curves. Click 'Clear scenarios' first.");
+        return;
+    }
+
+    double parallel = m_parallelShift->value() / 10000.0;
+    double twistS   = m_twistShort->value()    / 10000.0;
+    double twistL   = m_twistLong->value()     / 10000.0;
+    double butterfly= m_butterflyMid->value()  / 10000.0;
+
+    // 建立 shifted tenor rates
+    QVector<TenorRate> shiftedTenors;
+    double maxT = m_lastResult.maturitiesYears.last();
+    for (int i = 0; i < m_tenors.size(); ++i) {
+        double T        = m_tenors[i].months / 12.0;
+        double baseRate = m_tenors[i].spin->value();
+
+        // 平移
+        double shift = parallel;
+
+        // 扭轉：線性從 short end → long end
+        double tRatio = maxT > 0 ? T / maxT : 0;
+        shift += twistS * (1.0 - tRatio) + twistL * tRatio;
+
+        // 蝶形：頂點在曲線中間，拋物線形狀
+        // 中端最大，兩端最小
+        double midT = maxT / 2.0;
+        double bShape = 1.0 - std::pow((T - midT) / midT, 2.0);
+        shift += butterfly * qMax(0.0, bShape);
+
+        double newRate = qMax(0.001, baseRate + shift);
+        shiftedTenors.append({m_tenors[i].months, newRate});
+    }
+
+    // 同步計算（資料量小，直接在 UI thread 跑）
+    YieldCurveResult sc = AsyncWorker::staticComputeYieldCurve(shiftedTenors,
+                              AppSettings::instance().riskFreeRate());
+    if (!sc.success) {
+        emit statusMessage("Scenario error: " + sc.errorMsg);
+        return;
+    }
+
+    // 選顏色
+    static const QColor scenColors[] = {
+        QColor("#a855f7"),   // 紫
+        QColor("#f97316"),   // 橘
+        QColor("#22c55e"),   // 綠
+    };
+    QString name = QString("Scenario %1 (+%2bps P / %3/%4 T / %5 B)")
+                   .arg(m_scenCount+1)
+                   .arg(m_parallelShift->value(),0,'f',0)
+                   .arg(m_twistShort->value(),0,'f',0)
+                   .arg(m_twistLong->value(),0,'f',0)
+                   .arg(m_butterflyMid->value(),0,'f',0);
+
+    addScenarioSeries(sc, name, scenColors[m_scenCount]);
+    m_scenCount++;
+    emit statusMessage(name + " added.");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+void YieldCurveWidget::addScenarioSeries(const YieldCurveResult& r,
+                                          const QString& name,
+                                          const QColor& color)
+{
+    QLineSeries** target = nullptr;
+    if      (m_scenCount == 0) target = &m_scenSpot1;
+    else if (m_scenCount == 1) target = &m_scenSpot2;
+    else if (m_scenCount == 2) target = &m_scenSpot3;
+    else return;
+
+    if (*target == nullptr) {
+        *target = new QLineSeries;
+        QPen p(color); p.setWidth(2); p.setStyle(Qt::DashDotLine);
+        (*target)->setPen(p);
+        m_spotChart->addSeries(*target);
+        auto axX = m_spotChart->axes(Qt::Horizontal);
+        auto axY = m_spotChart->axes(Qt::Vertical);
+        if (!axX.isEmpty()) (*target)->attachAxis(axX.first());
+        if (!axY.isEmpty()) (*target)->attachAxis(axY.first());
+    }
+
+    (*target)->setName(name);
+    QVector<QPointF> pts;
+    for (int i = 0; i < r.maturitiesYears.size(); ++i)
+        pts.append({r.maturitiesYears[i], r.spotRates[i]});
+    (*target)->replace(pts);
 }
