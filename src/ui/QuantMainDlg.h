@@ -9,6 +9,7 @@ class PricerWidget;
 class WatchlistWidget;
 class BacktestWidget;
 class SettingsWidget;
+class YieldCurveWidget;
 
 //QT_BEGIN_NAMESPACE
 //namespace Ui { class QuantMainDlg; }
@@ -39,5 +40,6 @@ private:
     WatchlistWidget* m_watchlist = nullptr;
     BacktestWidget*  m_backtest  = nullptr;
     SettingsWidget*  m_settings  = nullptr;
+    YieldCurveWidget* m_yieldCurve  = nullptr;
 };
 

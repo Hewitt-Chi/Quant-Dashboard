@@ -5,6 +5,7 @@
 #include "WatchlistWidget.h"
 #include "BacktestWidget.h"
 #include "SettingsWidget.h"
+#include "YieldCurveWidget.h"
 #include "../infra/AppSettings.h"
 #include "../infra/AsyncWorker.h"
 #include "../infra/DatabaseManager.h"
@@ -118,71 +119,60 @@ void QuantMainDlg::setupUi()
 
     QFont gf; gf.setPointSize(9);
 
-    // ── 加 group 標籤（不可選）────────────────────────────────────────────────
     auto addGroup = [&](const QString& label) {
         auto* it = new QListWidgetItem(label, nav);
         it->setFlags(Qt::NoItemFlags);
         it->setForeground(QColor(110, 110, 110));
         it->setFont(gf);
-        it->setData(Qt::UserRole, -1);   // -1 = 不對應任何頁面
+        it->setData(Qt::UserRole, -1);
+        };
+    auto addPage = [&](const QString& label, int pageIndex) {
+        auto* it = new QListWidgetItem(label, nav);
+        it->setData(Qt::UserRole, pageIndex);
         };
 
-    addGroup("  MARKET");       // row 0
-    nav->addItem("  Watchlist");   // row 1
-    addGroup("  ANALYSIS");     // row 2
-    nav->addItem("  Option pricer");// row 3
-    addGroup("  STRATEGY");     // row 4
-    nav->addItem("  Backtest");    // row 5
-    addGroup("  SYSTEM");       // row 6
-    nav->addItem("  Settings");    // row 7
+    addGroup("  MARKET");
+    addPage("  Watchlist", 0);
+    addGroup("  ANALYSIS");
+    addPage("  Option pricer", 1);
+    addPage("  Yield curve", 3);
+    addGroup("  STRATEGY");
+    addPage("  Backtest", 2);
+    addGroup("  SYSTEM");
+    addPage("  Settings", 4);
 
     auto* stack = new QStackedWidget(this);
     m_watchlist = new WatchlistWidget(m_fetcher, m_db, this);
-    m_pricer    = new PricerWidget(m_worker, this);
-    m_backtest  = new BacktestWidget(m_worker, m_db, this);
-    m_settings  = new SettingsWidget(this);
-    stack->addWidget(m_watchlist);   // 0
-    stack->addWidget(m_pricer);      // 1
-    stack->addWidget(m_backtest);    // 2
-    stack->addWidget(m_settings);    // 3
+    m_pricer = new PricerWidget(m_worker, this);
+    m_backtest = new BacktestWidget(m_worker, m_db, this);
+    m_yieldCurve = new YieldCurveWidget(m_worker, this);
+    m_settings = new SettingsWidget(this);
+    stack->addWidget(m_watchlist);    // 0
+    stack->addWidget(m_pricer);       // 1
+    stack->addWidget(m_backtest);     // 2
+    stack->addWidget(m_yieldCurve);   // 3
+    stack->addWidget(m_settings);     // 4
 
-    // row ??page index
-    const QMap<int,int> rowToPage = {{1,0},{3,1},{5,2},{7,3}};
-    connect(nav, &QListWidget::currentRowChanged, [stack, rowToPage](int row){
-        if (rowToPage.contains(row))
-            stack->setCurrentIndex(rowToPage[row]);
-    });
-
-    // Status bar
-   /* auto connectStatus = [this](QObject* w, const char* sig) {
-        connect(w, sig, this, [this](const QString& m){
-            statusBar()->showMessage(m);
+    connect(nav, &QListWidget::currentItemChanged,
+        [stack](QListWidgetItem* item, QListWidgetItem*) {
+            if (!item) return;
+            int page = item->data(Qt::UserRole).toInt();
+            if (page >= 0) stack->setCurrentIndex(page);
         });
-        };*/
-    connect(m_watchlist, &WatchlistWidget::statusMessage,
-            this, [this](const QString& m){ statusBar()->showMessage(m); });
-    connect(m_pricer,    &PricerWidget::statusMessage,
-            this, [this](const QString& m){ statusBar()->showMessage(m); });
-    connect(m_backtest,  &BacktestWidget::statusMessage,
-            this, [this](const QString& m){ statusBar()->showMessage(m); });
-    connect(m_settings,  &SettingsWidget::statusMessage,
-            this, [this](const QString& m){ statusBar()->showMessage(m); });
-    connect(m_settings,  &SettingsWidget::settingsChanged,
-            this, &QuantMainDlg::onSettingsChanged);
 
-    //nav->setCurrentRow(1);
     nav->setCurrentItem(nav->item(1));
 
-    auto* splitter = new QSplitter(Qt::Horizontal, this);
-    splitter->addWidget(nav);
-    splitter->addWidget(stack);
-    splitter->setStretchFactor(0,0);
-    splitter->setStretchFactor(1,1);
-    splitter->handle(1)->setEnabled(false);
-    setCentralWidget(splitter);
+        auto* splitter = new QSplitter(Qt::Horizontal, this);
+        splitter->addWidget(nav);
+        splitter->addWidget(stack);
+        splitter->setStretchFactor(0, 0);
+        splitter->setStretchFactor(1, 1);
+        splitter->handle(1)->setEnabled(false);
+        setCentralWidget(splitter);
 
-    auto* dbLbl = new QLabel("DB: " + AppSettings::instance().dbPath(), this);
-    dbLbl->setStyleSheet("font-size:10px;color:gray;margin-right:6px;");
-    statusBar()->addPermanentWidget(dbLbl);
-    statusBar()->showMessage("Ready", 2000);
+        auto* dbLbl = new QLabel("DB: " + AppSettings::instance().dbPath(), this);
+        dbLbl->setStyleSheet("font-size:10px;color:gray;margin-right:6px;");
+        statusBar()->addPermanentWidget(dbLbl);
+        statusBar()->showMessage("Ready", 2000);
+     
 }

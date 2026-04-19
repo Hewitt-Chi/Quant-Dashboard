@@ -24,6 +24,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
+# Example CMakePresets.json:
+# {
+#   "version": 3,
+#   "configurePresets": [{
+#     "name": "default",
+#     "cacheVariables": {
+#       "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+#     }
+#   }]
+# }
 
 # ── Qt 設定 ───────────────────────────────────────────────────────────────────
 # 啟用 Qt 自動化工具
@@ -65,6 +75,8 @@ set(UI_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/BacktestWidget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/SettingsWidget.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/SettingsWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/YieldCurveWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/YieldCurveWidget.cpp
 )
 
 # ── 建置目標 ──────────────────────────────────────────────────────────────────
