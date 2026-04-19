@@ -77,13 +77,21 @@ set(UI_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/SettingsWidget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/YieldCurveWidget.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/YieldCurveWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/OptionChainWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/OptionChainWidget.cpp
 )
+
+if(WIN32)
+    set(PLATFORM_SOURCES app.rc)
+endif()
 
 # ¢w¢w «Ø¸m¥Ø¼Ð ¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w¢w
 qt_add_executable(Quant-Dashboard
     src/main.cpp
     ${INFRA_SOURCES}
     ${UI_SOURCES}
+    ${PLATFORM_SOURCES}
+    resources.qrc  
 )
 
 target_link_libraries(Quant-Dashboard PRIVATE

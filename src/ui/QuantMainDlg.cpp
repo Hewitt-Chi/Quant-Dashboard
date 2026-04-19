@@ -6,6 +6,7 @@
 #include "BacktestWidget.h"
 #include "SettingsWidget.h"
 #include "YieldCurveWidget.h"
+#include "OptionChainWidget.h"
 #include "../infra/AppSettings.h"
 #include "../infra/AsyncWorker.h"
 #include "../infra/DatabaseManager.h"
@@ -136,10 +137,11 @@ void QuantMainDlg::setupUi()
     addGroup("  ANALYSIS");
     addPage("  Option pricer", 1);
     addPage("  Yield curve", 3);
+    addPage("  Option chain",  4);
     addGroup("  STRATEGY");
     addPage("  Backtest", 2);
     addGroup("  SYSTEM");
-    addPage("  Settings", 4);
+    addPage("  Settings", 5);
 
     auto* stack = new QStackedWidget(this);
     m_watchlist = new WatchlistWidget(m_fetcher, m_db, this);
@@ -147,11 +149,15 @@ void QuantMainDlg::setupUi()
     m_backtest = new BacktestWidget(m_worker, m_db, this);
     m_yieldCurve = new YieldCurveWidget(m_worker, this);
     m_settings = new SettingsWidget(this);
+    m_yieldCurve = new YieldCurveWidget(m_worker, this);
+    // ¦b setupUi() ¸Ì
+    m_optionChain = new OptionChainWidget(m_worker, this);
     stack->addWidget(m_watchlist);    // 0
     stack->addWidget(m_pricer);       // 1
     stack->addWidget(m_backtest);     // 2
     stack->addWidget(m_yieldCurve);   // 3
-    stack->addWidget(m_settings);     // 4
+    stack->addWidget(m_optionChain);  // 4  
+    stack->addWidget(m_settings);     // 5
 
     connect(nav, &QListWidget::currentItemChanged,
         [stack](QListWidgetItem* item, QListWidgetItem*) {
@@ -160,6 +166,23 @@ void QuantMainDlg::setupUi()
             if (page >= 0) stack->setCurrentIndex(page);
         });
 
+    // Status bar
+    connect(m_watchlist, &WatchlistWidget::statusMessage,
+            this, [this](const QString& m){ statusBar()->showMessage(m); });
+    connect(m_pricer,    &PricerWidget::statusMessage,
+            this, [this](const QString& m){ statusBar()->showMessage(m); });
+    connect(m_backtest,  &BacktestWidget::statusMessage,
+            this, [this](const QString& m){ statusBar()->showMessage(m); });
+    connect(m_settings,  &SettingsWidget::statusMessage,
+            this, [this](const QString& m){ statusBar()->showMessage(m); });
+    connect(m_yieldCurve, &YieldCurveWidget::statusMessage,
+            this, [this](const QString& m){ statusBar()->showMessage(m); });
+    connect(m_optionChain, &OptionChainWidget::statusMessage,
+            this, [this](const QString& m){ statusBar()->showMessage(m); });
+    connect(m_settings,  &SettingsWidget::settingsChanged,
+            this, &QuantMainDlg::onSettingsChanged);
+
+    // ?è¨­??Watchlist
     nav->setCurrentItem(nav->item(1));
 
         auto* splitter = new QSplitter(Qt::Horizontal, this);
