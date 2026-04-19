@@ -14,6 +14,9 @@
 #include <QHeaderView>
 #include <QComboBox>
 #include <QSplitter>
+#include <QFileDialog>
+#include <QTextStream>
+#include <QMessageBox>
 
 #include <QtCharts/QChart>
 #include <QtCharts/QChartView>
@@ -111,6 +114,17 @@ QWidget* YieldCurveWidget::buildInputPanel()
     m_presetCombo->setMinimumWidth(220);
     topRow->addWidget(m_presetCombo);
     topRow->addStretch();
+
+    m_exportBtn = new QPushButton("Export CSV", box);
+    m_exportBtn->setMinimumHeight(32); m_exportBtn->setMinimumWidth(110);
+    m_exportBtn->setEnabled(false);  // 計算前不可用
+    m_exportBtn->setStyleSheet(
+        "QPushButton{border:0.5px solid palette(mid);border-radius:6px;padding:0 12px;}"
+        "QPushButton:hover{background:palette(midlight);}"
+        "QPushButton:disabled{color:palette(mid);}");
+    topRow->addWidget(m_exportBtn);
+    connect(m_exportBtn, &QPushButton::clicked, this, &YieldCurveWidget::onExportCsv);
+
     m_calcBtn = new QPushButton("Bootstrap curve", box);
     m_calcBtn->setMinimumHeight(32); m_calcBtn->setMinimumWidth(140);
     m_calcBtn->setStyleSheet(
@@ -171,21 +185,24 @@ QWidget* YieldCurveWidget::buildSpotForwardTab()
     m_spotChart   = makeChart(true);
     m_spotSeries  = new QLineSeries; m_spotSeries->setName("Spot rate");
     m_zeroSeries  = new QLineSeries; m_zeroSeries->setName("Zero rate");
-    m_fwdSeries   = new QLineSeries; m_fwdSeries->setName("1M forward");
+    m_fwdSeries    = new QLineSeries; m_fwdSeries->setName("1M forward (raw)");
+    m_fwdSmoothed  = new QLineSeries; m_fwdSmoothed->setName("Forward (3M avg)");
     QPen ps(QColor("#3b82f6")); ps.setWidth(2); m_spotSeries->setPen(ps);
     QPen pz(QColor("#10b981")); pz.setWidth(2); m_zeroSeries->setPen(pz);
-    QPen pf(QColor("#f97316")); pf.setWidth(1); pf.setStyle(Qt::DashLine);
+    QPen pf(QColor("#f97316")); pf.setWidth(1); pf.setStyle(Qt::DashLine); pf.setColor(QColor(249,115,22,80));
     m_fwdSeries->setPen(pf);
+    QPen ps2(QColor("#fb923c")); ps2.setWidth(2); m_fwdSmoothed->setPen(ps2);
 
     m_spotChart->addSeries(m_spotSeries);
     m_spotChart->addSeries(m_zeroSeries);
     m_spotChart->addSeries(m_fwdSeries);
+    m_spotChart->addSeries(m_fwdSmoothed);
 
     auto* axX = makeAxis("Maturity (years)", "%.1f", 7);
     auto* axY = makeAxis("Rate (%)",         "%.2f", 7);
     m_spotChart->addAxis(axX, Qt::AlignBottom);
     m_spotChart->addAxis(axY, Qt::AlignLeft);
-    for (auto* s : {m_spotSeries, m_zeroSeries, m_fwdSeries}) {
+    for (auto* s : {m_spotSeries, m_zeroSeries, m_fwdSeries, m_fwdSmoothed}) {
         s->attachAxis(axX); s->attachAxis(axY);
     }
 
@@ -266,6 +283,7 @@ void YieldCurveWidget::onYieldCurveFinished(const YieldCurveResult& result)
 {
     m_calcBtn->setEnabled(true);
     m_calcBtn->setText("Bootstrap curve");
+    m_lastResult = result;   // 儲存供 Export CSV 使用
 
     if (!result.success) {
         emit statusMessage("Yield curve error: " + result.errorMsg);
@@ -295,23 +313,26 @@ void YieldCurveWidget::onYieldCurveFinished(const YieldCurveResult& result)
 // ─────────────────────────────────────────────────────────────────────────────
 void YieldCurveWidget::updateCharts(const YieldCurveResult& r)
 {
-    QVector<QPointF> spotPts, zeroPts, fwdPts, discPts;
+    QVector<QPointF> spotPts, zeroPts, fwdPts, fwdSmPts, discPts;
     int n = r.maturitiesYears.size();
     spotPts.reserve(n); zeroPts.reserve(n);
-    fwdPts.reserve(n);  discPts.reserve(n);
+    fwdPts.reserve(n);  fwdSmPts.reserve(n); discPts.reserve(n);
 
     for (int i = 0; i < n; ++i) {
         double T = r.maturitiesYears[i];
         spotPts.append({T, r.spotRates[i]});
         zeroPts.append({T, r.zeroRates[i]});
         fwdPts .append({T, r.forwardRates[i]});
+        fwdSmPts.append({T, r.smoothedForwardRates[i]});
         discPts.append({T, r.discountFactors[i]});
     }
 
-    m_spotSeries->replace(spotPts);
-    m_zeroSeries->replace(zeroPts);
-    m_fwdSeries ->replace(fwdPts);
-    m_discSeries->replace(discPts);
+    m_spotSeries ->replace(spotPts);
+    m_zeroSeries ->replace(zeroPts);
+    m_fwdSeries  ->replace(fwdPts);
+    m_fwdSmoothed->replace(fwdSmPts);
+    m_discSeries ->replace(discPts);
+    m_exportBtn->setEnabled(true);
 
     // 更新軸範圍
     double maxT = r.maturitiesYears.last();
@@ -328,7 +349,7 @@ void YieldCurveWidget::updateCharts(const YieldCurveResult& r)
 
     // Spot/Zero/Forward chart
     double yMin1 = 999, yMax1 = -999;
-    for (const auto& v : r.spotRates+r.zeroRates+r.forwardRates) {
+    for (const auto& v : r.spotRates+r.zeroRates+r.smoothedForwardRates) {
         yMin1 = qMin(yMin1, v); yMax1 = qMax(yMax1, v);
     }
     updateAxes(m_spotChart, maxT, yMin1, yMax1);
@@ -378,4 +399,49 @@ void YieldCurveWidget::updateTable(const YieldCurveResult& r)
             }
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// onExportCsv  —  匯出完整曲線數據到 CSV
+// ─────────────────────────────────────────────────────────────────────────────
+void YieldCurveWidget::onExportCsv()
+{
+    if (!m_lastResult.success || m_lastResult.maturitiesYears.isEmpty()) {
+        emit statusMessage("No curve data to export. Please bootstrap first.");
+        return;
+    }
+
+    QString path = QFileDialog::getSaveFileName(
+        this,
+        "Export yield curve data",
+        "yield_curve.csv",
+        "CSV files (*.csv);;All files (*)");
+
+    if (path.isEmpty()) return;
+
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QMessageBox::warning(this, "Export failed",
+                             "Cannot open file: " + path);
+        return;
+    }
+
+    QTextStream out(&file);
+
+    // Header
+    out << "Maturity_Years,Spot_Rate_pct,Zero_Rate_pct,"
+           "Forward_Raw_pct,Forward_Smoothed_pct,Discount_Factor\n";
+
+    const int n = m_lastResult.maturitiesYears.size();
+    for (int i = 0; i < n; ++i) {
+        out << QString::number(m_lastResult.maturitiesYears[i],     'f', 4) << ","
+            << QString::number(m_lastResult.spotRates[i],           'f', 6) << ","
+            << QString::number(m_lastResult.zeroRates[i],           'f', 6) << ","
+            << QString::number(m_lastResult.forwardRates[i],        'f', 6) << ","
+            << QString::number(m_lastResult.smoothedForwardRates[i],'f', 6) << ","
+            << QString::number(m_lastResult.discountFactors[i],     'f', 8) << "\n";
+    }
+    file.close();
+
+    emit statusMessage(QString("Exported %1 data points to: %2").arg(n).arg(path));
 }
