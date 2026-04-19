@@ -54,16 +54,47 @@ struct PricingRequest
 // ─────────────────────────────────────────────────────────────────────────────
 // BacktestRequest / BacktestResult
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// YieldCurveRequest / YieldCurveResult
+// ─────────────────────────────────────────────────────────────────────────────
+struct TenorRate
+{
+    int    months = 0;     // 期限（月）
+    double rate   = 0.0;   // 年化利率（decimal，e.g. 0.05）
+};
+
+struct YieldCurveResult
+{
+    bool    success = false;
+    QString errorMsg;
+
+    QVector<double> maturitiesYears;  // X 軸：期限（年）
+    QVector<double> spotRates;        // 即期利率（%）
+    QVector<double> forwardRates;     // 1 年遠期利率（%）
+    QVector<double> discountFactors;  // 折現因子
+    QVector<double> zeroRates;        // 零息利率（%）
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BacktestRequest / BacktestResult
+// ─────────────────────────────────────────────────────────────────────────────
 struct BacktestRequest
 {
-    QString symbol;
-    QVector<double> closePrices;   // 按時間排序的收盤價
+    enum class Strategy {
+        CoveredCall,      // 賣出 OTM Call + 持股
+        ProtectivePut,    // 買入 OTM Put + 持股
+        IronCondor        // 賣 OTM Call + 買更 OTM Call + 賣 OTM Put + 買更 OTM Put
+    };
 
-    // Covered Call 參數
-    double strikeOffsetPct = 0.05; // OTM 百分比，例如 0.05 = 5% OTM
-    int    dteDays         = 30;   // Days to expiration
-    double impliedVol      = 0.20;
-    double riskFreeRate    = 0.05;
+    QString symbol;
+    QVector<double> closePrices;
+
+    Strategy strategy        = Strategy::CoveredCall;
+    double strikeOffsetPct   = 0.05;   // OTM% for short legs
+    double wingWidthPct      = 0.05;   // Iron Condor: width of long legs
+    int    dteDays           = 30;
+    double impliedVol        = 0.20;
+    double riskFreeRate      = 0.05;
 };
 
 struct BacktestResult
@@ -108,6 +139,9 @@ public:
     // 提交回測（非阻塞）
     void submitBacktest(const BacktestRequest& req);
 
+    // 提交殖利率曲線計算（非阻塞）
+    void submitYieldCurve(const QVector<TenorRate>& tenors, double riskFreeRate);
+
     // 取消所有進行中的工作
     void cancelAll();
 
@@ -121,14 +155,16 @@ public:
 signals:
     void pricingFinished(const PricingResult& result);
     void backtestFinished(const BacktestResult& result);
+    void yieldCurveFinished(const YieldCurveResult& result);
     void progressUpdated(int percent);   // 回測進度 0–100
 
 private:
     // 靜態計算函式（在 worker thread 執行，無 Qt 物件限制）
-    static PricingResult  computePricing(PricingRequest req);
-    static BacktestResult computeBacktest(BacktestRequest req,
-                                          AsyncWorker* self);
+    static PricingResult     computePricing(PricingRequest req);
+    static BacktestResult    computeBacktest(BacktestRequest req, AsyncWorker* self);
+    static YieldCurveResult  computeYieldCurve(QVector<TenorRate> tenors, double rf);
 
-    QFutureWatcher<PricingResult>*  m_pricingWatcher  = nullptr;
-    QFutureWatcher<BacktestResult>* m_backtestWatcher = nullptr;
+    QFutureWatcher<PricingResult>*    m_pricingWatcher   = nullptr;
+    QFutureWatcher<BacktestResult>*   m_backtestWatcher  = nullptr;
+    QFutureWatcher<YieldCurveResult>* m_yieldWatcher     = nullptr;
 };

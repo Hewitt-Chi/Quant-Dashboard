@@ -13,19 +13,17 @@ using namespace QuantLib;
 AsyncWorker::AsyncWorker(QObject* parent)
     : QObject(parent)
 {
-    // ── Pricing watcher ──────────────────────────────────────────────────────
     m_pricingWatcher = new QFutureWatcher<PricingResult>(this);
     connect(m_pricingWatcher, &QFutureWatcher<PricingResult>::finished,
-            this, [this]() {
-                emit pricingFinished(m_pricingWatcher->result());
-            });
+            this, [this]() { emit pricingFinished(m_pricingWatcher->result()); });
 
-    // ── Backtest watcher ─────────────────────────────────────────────────────
     m_backtestWatcher = new QFutureWatcher<BacktestResult>(this);
     connect(m_backtestWatcher, &QFutureWatcher<BacktestResult>::finished,
-            this, [this]() {
-                emit backtestFinished(m_backtestWatcher->result());
-            });
+            this, [this]() { emit backtestFinished(m_backtestWatcher->result()); });
+
+    m_yieldWatcher = new QFutureWatcher<YieldCurveResult>(this);
+    connect(m_yieldWatcher, &QFutureWatcher<YieldCurveResult>::finished,
+            this, [this]() { emit yieldCurveFinished(m_yieldWatcher->result()); });
 }
 
 AsyncWorker::~AsyncWorker()
@@ -34,32 +32,28 @@ AsyncWorker::~AsyncWorker()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Public API
-// ─────────────────────────────────────────────────────────────────────────────
 void AsyncWorker::submitPricing(const PricingRequest& req)
 {
-    if (m_pricingWatcher->isRunning())
-        m_pricingWatcher->cancel();
-
-    // 複製 req，在背景執行緒中使用（Qt 不允許跨執行緒共享 QObject）
-    auto future = QtConcurrent::run([req]() {
-        return computePricing(req);
-    });
-    m_pricingWatcher->setFuture(future);
+    if (m_pricingWatcher->isRunning()) m_pricingWatcher->cancel();
+    m_pricingWatcher->setFuture(
+        QtConcurrent::run([req]() { return computePricing(req); }));
 }
 
 void AsyncWorker::submitBacktest(const BacktestRequest& req)
 {
-    if (m_backtestWatcher->isRunning())
-        m_backtestWatcher->cancel();
-
-    // 傳入 self 指標用於進度回報（透過 invokeMethod 跨執行緒安全呼叫）
-    auto future = QtConcurrent::run([req, this]() {
-        return computeBacktest(req, this);
-    });
-    m_backtestWatcher->setFuture(future);
+    if (m_backtestWatcher->isRunning()) m_backtestWatcher->cancel();
+    m_backtestWatcher->setFuture(
+        QtConcurrent::run([req, this]() { return computeBacktest(req, this); }));
 }
 
+void AsyncWorker::submitYieldCurve(const QVector<TenorRate>& tenors, double riskFreeRate)
+{
+    if (m_yieldWatcher->isRunning()) m_yieldWatcher->cancel();
+    m_yieldWatcher->setFuture(
+        QtConcurrent::run([tenors, riskFreeRate]() {
+            return computeYieldCurve(tenors, riskFreeRate);
+        }));
+}
 void AsyncWorker::cancelAll()
 {
     m_pricingWatcher->cancel();
@@ -70,7 +64,7 @@ void AsyncWorker::cancelAll()
 
 bool AsyncWorker::isBusy() const
 {
-    return m_pricingWatcher->isRunning() || m_backtestWatcher->isRunning();
+    return m_pricingWatcher->isRunning() || m_backtestWatcher->isRunning() || m_yieldWatcher->isRunning();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -178,63 +172,91 @@ BacktestResult AsyncWorker::computeBacktest(BacktestRequest req,
         const int n = req.closePrices.size();
         result.portfolioValues.reserve(n);
 
-        double cashBalance = 0.0;    // 現金（premium + assignment 所得）
-        double shares      = 1.0;    // 持股數量
-        double openStrike  = 0.0;    // 未平倉 call 的 strike
+        double cashBalance = 0.0;
+        double shares      = 1.0;
+        double openStrike  = 0.0;
         bool   hasOpenCall = false;
         double peakValue   = req.closePrices.first();
         double maxDD       = 0.0;
         int    nextExpiry  = req.dteDays;
 
+        // BSM price helper lambda (used by all strategies)
+        auto bsmPrice = [&](double spot, double strike, Option::Type ot,
+                            double T) -> double {
+            Handle<Quote>              sH(boost::make_shared<SimpleQuote>(spot));
+            Handle<YieldTermStructure> rH(boost::make_shared<FlatForward>(today, req.riskFreeRate, dc));
+            Handle<YieldTermStructure> dH(boost::make_shared<FlatForward>(today, 0.0, dc));
+            Handle<BlackVolTermStructure> vH(boost::make_shared<BlackConstantVol>(today, cal, req.impliedVol, dc));
+            auto process = boost::make_shared<BlackScholesMertonProcess>(sH, dH, rH, vH);
+            Date exDate  = today + static_cast<int>(T * 365);
+            auto payoff  = boost::make_shared<PlainVanillaPayoff>(ot, strike);
+            auto exer    = boost::make_shared<EuropeanExercise>(exDate);
+            VanillaOption opt(payoff, exer);
+            opt.setPricingEngine(boost::make_shared<AnalyticEuropeanEngine>(process));
+            return opt.NPV();
+        };
+
+        double T = req.dteDays / 365.0;
+
         for (int i = 0; i < n; ++i) {
             double spot = req.closePrices[i];
 
-            // ── 到期日：處理 assignment 或 expire worthless ───────────────────
-            if (i == nextExpiry && hasOpenCall) {
-                if (spot > openStrike) {
-                    // Assigned：股票以 strike 賣出
-                    cashBalance += shares * openStrike;
-                    shares       = 0.0;
-                    // 以市價買回 1 股繼續持有（roll，放棄 spot-strike 上漲）
-                    double cost = spot;
-                    if (cashBalance >= cost) {
-                        cashBalance -= cost;
-                        shares       = 1.0;
-                    } else {
-                        shares      = cashBalance / spot;
-                        cashBalance = 0.0;
+            if (i == nextExpiry) {
+                // ── 到期：平倉所有選擇權 ─────────────────────────────────────
+
+                if (req.strategy == BacktestRequest::Strategy::CoveredCall && hasOpenCall) {
+                    if (spot > openStrike) {
+                        cashBalance += shares * openStrike;
+                        shares = 0.0;
+                        if (cashBalance >= spot) { cashBalance -= spot; shares = 1.0; }
+                        else { shares = cashBalance / spot; cashBalance = 0.0; }
+                        result.assignmentEvents.append(i);
                     }
-                    result.assignmentEvents.append(i);
+                    hasOpenCall = false;
                 }
-                hasOpenCall = false;
-            }
 
-            // ── 賣出新的 covered call ─────────────────────────────────────────
-            if (i == nextExpiry && shares > 0.0) {
-                double strike = spot * (1.0 + req.strikeOffsetPct);
+                // ── 開新倉 ───────────────────────────────────────────────────
+                if (req.strategy == BacktestRequest::Strategy::CoveredCall && shares > 0.0) {
+                    // 賣 OTM call
+                    double strike = spot * (1.0 + req.strikeOffsetPct);
+                    double prem   = bsmPrice(spot, strike, Option::Call, T) * shares;
+                    cashBalance  += prem;
+                    openStrike    = strike;
+                    hasOpenCall   = true;
+                    result.premiumPerTrade.append(prem);
 
-                Handle<Quote>              sH(boost::make_shared<SimpleQuote>(spot));
-                Handle<YieldTermStructure> rH(
-                    boost::make_shared<FlatForward>(today, req.riskFreeRate, dc));
-                Handle<YieldTermStructure> dH(
-                    boost::make_shared<FlatForward>(today, 0.0, dc));
-                Handle<BlackVolTermStructure> vH(
-                    boost::make_shared<BlackConstantVol>(today, cal, req.impliedVol, dc));
+                } else if (req.strategy == BacktestRequest::Strategy::ProtectivePut) {
+                    // 買 OTM put（付 premium，保護下檔）
+                    double strike = spot * (1.0 - req.strikeOffsetPct);
+                    double cost   = bsmPrice(spot, strike, Option::Put, T) * shares;
+                    cashBalance  -= cost;   // 付出保險費
+                    result.premiumPerTrade.append(-cost);  // 負值 = 付出
 
-                auto process = boost::make_shared<BlackScholesMertonProcess>(sH, dH, rH, vH);
-                Date exDate  = today + req.dteDays;
-                auto payoff  = boost::make_shared<PlainVanillaPayoff>(Option::Call, strike);
-                auto exer    = boost::make_shared<EuropeanExercise>(exDate);
-                VanillaOption call(payoff, exer);
-                call.setPricingEngine(
-                    boost::make_shared<AnalyticEuropeanEngine>(process));
+                } else if (req.strategy == BacktestRequest::Strategy::IronCondor) {
+                    // Iron Condor：
+                    //   賣 shortCallStrike OTM call + 買 longCallStrike 更 OTM call
+                    //   賣 shortPutStrike  OTM put  + 買 longPutStrike  更 OTM put
+                    double shortCall = spot * (1.0 + req.strikeOffsetPct);
+                    double longCall  = spot * (1.0 + req.strikeOffsetPct + req.wingWidthPct);
+                    double shortPut  = spot * (1.0 - req.strikeOffsetPct);
+                    double longPut   = spot * (1.0 - req.strikeOffsetPct - req.wingWidthPct);
 
-                double callPremium = call.NPV() * shares;
-                cashBalance  += callPremium;
-                openStrike    = strike;
-                hasOpenCall   = true;
-                result.premiumPerTrade.append(callPremium);
-                nextExpiry   += req.dteDays;
+                    double premium =
+                        bsmPrice(spot, shortCall, Option::Call, T) -
+                        bsmPrice(spot, longCall,  Option::Call, T) +
+                        bsmPrice(spot, shortPut,  Option::Put,  T) -
+                        bsmPrice(spot, longPut,   Option::Put,  T);
+                    cashBalance += premium;
+                    result.premiumPerTrade.append(premium);
+
+                    // 到期時損益（簡化：只考慮 short legs 被 assigned）
+                    if (spot > shortCall)
+                        cashBalance -= qMin(spot - shortCall, spot * req.wingWidthPct);
+                    if (spot < shortPut)
+                        cashBalance -= qMin(shortPut - spot, spot * req.wingWidthPct);
+                }
+
+                nextExpiry += req.dteDays;
             }
 
             // ── Portfolio value = 持股市值 + 現金 ────────────────────────────
@@ -242,12 +264,10 @@ BacktestResult AsyncWorker::computeBacktest(BacktestRequest req,
             result.portfolioValues.append(value);
             result.buyHoldValues.append(spot);
 
-            // ── Max drawdown ──────────────────────────────────────────────────
             peakValue = qMax(peakValue, value);
             double dd = (peakValue - value) / peakValue;
             maxDD     = qMax(maxDD, dd);
 
-            // ── 進度回報 ──────────────────────────────────────────────────────
             if (i % (n / 20 + 1) == 0) {
                 int pct = static_cast<int>(100.0 * i / n);
                 QMetaObject::invokeMethod(self, "progressUpdated",
@@ -258,7 +278,7 @@ BacktestResult AsyncWorker::computeBacktest(BacktestRequest req,
 
         // ── 統計指標 ─────────────────────────────────────────────────────────
         result.maxDrawdown       = maxDD;
-        // premiumCollected = 所有 premiumPerTrade 的總和
+        // premiumCollected = 所有 per-trade premium 的總和
         double totalPremium = 0.0;
         for (double p : result.premiumPerTrade) totalPremium += p;
         result.premiumCollected = totalPremium;
@@ -287,6 +307,76 @@ BacktestResult AsyncWorker::computeBacktest(BacktestRequest req,
 
         result.success = true;
 
+    } catch (const std::exception& e) {
+        result.success  = false;
+        result.errorMsg = QString::fromStdString(e.what());
+    }
+    return result;
+}
+
+// =============================================================================
+// computeYieldCurve — QuantLib Piecewise Bootstrap
+// =============================================================================
+YieldCurveResult AsyncWorker::computeYieldCurve(QVector<TenorRate> tenors,
+                                                  double rf)
+{
+    YieldCurveResult result;
+    if (tenors.size() < 2) {
+        result.errorMsg = "Need at least 2 tenor points";
+        return result;
+    }
+
+    try {
+        DayCounter dc    = Actual365Fixed();
+        Calendar   cal   = NullCalendar();
+        Date       today = Date::todaysDate();
+        Settings::instance().evaluationDate() = today;
+
+        // 把輸入的 tenor/rate 對轉成 QuantLib RateHelper
+        std::vector<boost::shared_ptr<RateHelper>> helpers;
+        for (const auto& tr : tenors) {
+            Period tenor(tr.months, Months);
+            Handle<Quote> rateH(boost::make_shared<SimpleQuote>(tr.rate));
+            auto helper = boost::make_shared<DepositRateHelper>(
+                rateH, tenor, 0, cal, ModifiedFollowing, false, dc);
+            helpers.push_back(helper);
+        }
+
+        // Piecewise bootstrap 殖利率曲線
+        auto curve = boost::make_shared<
+            PiecewiseYieldCurve<Discount, LogLinear>>(today, helpers, dc);
+        curve->enableExtrapolation();
+
+        // 掃描輸出點：每個月一個點，最多到最長期限
+        int maxMonths = 0;
+        for (const auto& tr : tenors) maxMonths = qMax(maxMonths, tr.months);
+
+        for (int m = 1; m <= maxMonths; ++m) {
+            double T = m / 12.0;
+            Date   d = today + Period(m, Months);
+
+            double df    = curve->discount(d);
+            double spot  = -std::log(df) / T * 100.0;           // 連續複利 %
+            double fwd   = 0.0;
+            if (m > 1) {
+                Date   d1  = today + Period(m-1, Months);
+                double df1 = curve->discount(d1);
+                double T1  = (m-1) / 12.0;
+                double dT  = T - T1;
+                fwd = -std::log(df / df1) / dT * 100.0;
+            } else {
+                fwd = spot;
+            }
+
+            result.maturitiesYears.append(T);
+            result.spotRates.append(spot);
+            result.forwardRates.append(fwd);
+            result.discountFactors.append(df);
+            result.zeroRates.append(
+                curve->zeroRate(d, dc, Continuous).rate() * 100.0);
+        }
+
+        result.success = true;
     } catch (const std::exception& e) {
         result.success  = false;
         result.errorMsg = QString::fromStdString(e.what());
