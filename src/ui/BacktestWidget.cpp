@@ -88,8 +88,17 @@ BacktestWidget::BacktestWidget(AsyncWorker*     worker,
     root->addWidget(buildParamsPanel());
     root->addWidget(buildMetricCards());
 
+    // 左欄：上 PnL 圖 + 下 Drawdown 圖
+    auto* leftSplit = new QSplitter(Qt::Vertical, this);
+    leftSplit->addWidget(buildPnlChart());
+    m_ddPanel = buildDrawdownChart();
+    m_ddPanel->setVisible(false);   // 預設隱藏，Protective Put 時顯示
+    leftSplit->addWidget(m_ddPanel);
+    leftSplit->setStretchFactor(0, 3);
+    leftSplit->setStretchFactor(1, 2);
+
     auto* splitter = new QSplitter(Qt::Horizontal, this);
-    splitter->addWidget(buildPnlChart());
+    splitter->addWidget(leftSplit);
     splitter->addWidget(buildTradeLog());
     splitter->setStretchFactor(0, 3);
     splitter->setStretchFactor(1, 2);
@@ -256,6 +265,91 @@ QWidget* BacktestWidget::buildPnlChart()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// buildDrawdownChart  —  Protective Put 專用：策略 vs B&H 回撤比較
+// ─────────────────────────────────────────────────────────────────────────────
+QWidget* BacktestWidget::buildDrawdownChart()
+{
+    auto* box = new QGroupBox("Drawdown comparison (Protective Put)", this);
+    auto* lay = new QVBoxLayout(box);
+
+    auto* infoLbl = new QLabel(
+        "Shows how the Put hedge limits downside vs unhedged B&H position.", box);
+    infoLbl->setStyleSheet("font-size:11px;color:rgba(150,150,150,0.7);");
+    lay->addWidget(infoLbl);
+
+    m_ddChart    = new QChart;
+    m_ddChart->legend()->setVisible(true);
+    m_ddChart->legend()->setAlignment(Qt::AlignBottom);
+    m_ddChart->legend()->setLabelColor(QColor(180,180,180));
+    m_ddChart->setMargins(QMargins(4,4,4,4));
+    m_ddChart->setBackgroundVisible(false);
+
+    m_ddStrategy = new QLineSeries; m_ddStrategy->setName("Strategy drawdown %");
+    m_ddBH       = new QLineSeries; m_ddBH->setName("B&H drawdown %");
+    QPen ps(QColor("#3b82f6")); ps.setWidth(2); m_ddStrategy->setPen(ps);
+    QPen pb(QColor("#ef4444")); pb.setWidth(1); pb.setStyle(Qt::DashLine);
+    m_ddBH->setPen(pb);
+    m_ddChart->addSeries(m_ddStrategy);
+    m_ddChart->addSeries(m_ddBH);
+
+    auto mkAx = [](const QString& t, const QString& f) {
+        auto* a = new QValueAxis;
+        a->setTitleText(t); a->setLabelFormat(f); a->setTickCount(6);
+        a->setLabelsColor(QColor(180,180,180));
+        a->setTitleBrush(QColor(180,180,180));
+        QPen gp(QColor(55,55,55)); gp.setWidth(1); a->setGridLinePen(gp);
+        return a;
+    };
+    auto* axX = mkAx("Day",          "%.0f");
+    auto* axY = mkAx("Drawdown (%)", "%.1f");
+    m_ddChart->addAxis(axX, Qt::AlignBottom);
+    m_ddChart->addAxis(axY, Qt::AlignLeft);
+    m_ddStrategy->attachAxis(axX); m_ddStrategy->attachAxis(axY);
+    m_ddBH->attachAxis(axX);       m_ddBH->attachAxis(axY);
+
+    m_ddView = new QChartView(m_ddChart, box);
+    m_ddView->setRenderHint(QPainter::Antialiasing);
+    m_ddView->setMinimumHeight(160);
+    lay->addWidget(m_ddView);
+    return box;
+}
+
+void BacktestWidget::updateDrawdownChart(const BacktestResult& r)
+{
+    // 計算 rolling drawdown（負值，單位 %）
+    auto calcDD = [](const QVector<double>& vals) -> QVector<QPointF> {
+        QVector<QPointF> pts;
+        pts.reserve(vals.size());
+        double peak = vals.isEmpty() ? 1.0 : vals.first();
+        for (int i = 0; i < vals.size(); ++i) {
+            peak = qMax(peak, vals[i]);
+            double dd = (peak > 0) ? (vals[i] - peak) / peak * 100.0 : 0.0;
+            pts.append({static_cast<double>(i), dd});
+        }
+        return pts;
+    };
+
+    auto stratPts = calcDD(r.portfolioValues);
+    auto bhPts    = calcDD(r.buyHoldValues);
+
+    m_ddStrategy->replace(stratPts);
+    m_ddBH->replace(bhPts);
+
+    // 軸範圍
+    auto axX = m_ddChart->axes(Qt::Horizontal);
+    auto axY = m_ddChart->axes(Qt::Vertical);
+    if (!axX.isEmpty())
+        qobject_cast<QValueAxis*>(axX.first())
+            ->setRange(0, r.portfolioValues.size()-1);
+    if (!axY.isEmpty()) {
+        double yMin = -0.01;
+        for (const auto& p : stratPts + bhPts)
+            yMin = qMin(yMin, p.y());
+        qobject_cast<QValueAxis*>(axY.first())->setRange(yMin * 1.05, 1.0);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // buildTradeLog
 // ─────────────────────────────────────────────────────────────────────────────
 QWidget* BacktestWidget::buildTradeLog()
@@ -347,10 +441,18 @@ void BacktestWidget::onBacktestFinished(const BacktestResult& result)
         "peak to trough",
         false);
 
-    m_cardPremium->setValue(
-        QString("$%1").arg(result.premiumCollected,0,'f',2),
-        "total collected",
-        true);
+    bool isProtPut2 = (m_strategyCombo->currentIndex() == 1);
+    if (isProtPut2) {
+        m_cardPremium->setValue(
+            QString("$%1").arg(qAbs(result.premiumCollected),0,'f',2),
+            "insurance cost",
+            false);  // 保護成本 = 負面
+    } else {
+        m_cardPremium->setValue(
+            QString("$%1").arg(result.premiumCollected,0,'f',2),
+            "total collected",
+            true);
+    }
 
     // ── PnL 圖表 ──────────────────────────────────────────────────────────────
     const auto& vals = result.portfolioValues;
@@ -365,8 +467,20 @@ void BacktestWidget::onBacktestFinished(const BacktestResult& result)
             bhPts.append({static_cast<double>(i), bhVals[i]});
     }
 
+    // 根據策略更新 series 名稱
+    switch (result.assignmentEvents.size() > 0 ? 0 : 0) { default: break; }
+    QString stratLabel =
+        m_strategyCombo->currentIndex() == 0 ? "Covered call" :
+        m_strategyCombo->currentIndex() == 1 ? "Protective put" : "Iron condor";
+    m_seriesCC->setName(stratLabel);
+
     m_seriesCC->replace(ccPts);
     m_seriesBH->replace(bhPts);
+
+    // Protective Put：顯示 Drawdown 比較圖
+    bool isProtPut = (m_strategyCombo->currentIndex() == 1);
+    m_ddPanel->setVisible(isProtPut);
+    if (isProtPut) updateDrawdownChart(result);
 
     // 軸範圍：取 CC + BH 兩條線的合併 min/max
     auto axX = m_chart->axes(Qt::Horizontal);

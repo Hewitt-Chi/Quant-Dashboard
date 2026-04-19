@@ -58,7 +58,9 @@ private:
     QWidget* buildParamsPanel();
     QWidget* buildMetricCards();
     QWidget* buildPnlChart();
+    QWidget* buildDrawdownChart();
     QWidget* buildTradeLog();
+    void     updateDrawdownChart(const BacktestResult& r);
 
     BacktestRequest currentRequest() const;
     void setRunning(bool on);
@@ -87,8 +89,15 @@ private:
     // ── PnL Chart ─────────────────────────────────────────────────────────────
     QChart*      m_chart      = nullptr;
     QChartView*  m_chartView  = nullptr;
-    QLineSeries* m_seriesCC   = nullptr;   // Covered Call
+    QLineSeries* m_seriesCC   = nullptr;   // Strategy (CC / PP / IC)
     QLineSeries* m_seriesBH   = nullptr;   // Buy & Hold
+
+    // ── Drawdown Chart（Protective Put 專用）─────────────────────────────────
+    QChart*      m_ddChart    = nullptr;
+    QChartView*  m_ddView     = nullptr;
+    QLineSeries* m_ddStrategy = nullptr;   // Strategy drawdown %
+    QLineSeries* m_ddBH       = nullptr;   // B&H drawdown %
+    QWidget*     m_ddPanel    = nullptr;   // 整個 drawdown panel
 
     // ── Trade log ─────────────────────────────────────────────────────────────
     QTableWidget* m_tradeLog  = nullptr;
