@@ -106,21 +106,29 @@ BacktestWidget::BacktestWidget(AsyncWorker*     worker,
 // ─────────────────────────────────────────────────────────────────────────────
 QWidget* BacktestWidget::buildParamsPanel()
 {
-    auto* box  = new QGroupBox("Covered Call Strategy Parameters", this);
+    auto* box  = new QGroupBox("Strategy Parameters", this);
     auto* grid = new QGridLayout(box);
     grid->setHorizontalSpacing(12);
     grid->setVerticalSpacing(6);
 
-    // Symbol
-    grid->addWidget(new QLabel("Symbol", box), 0, 0);
+    // ── Strategy 選擇 (col 0) ────────────────────────────────────────────────
+    grid->addWidget(new QLabel("Strategy", box), 0, 0);
+    m_strategyCombo = new QComboBox(box);
+    m_strategyCombo->addItem("Covered Call",   0);
+    m_strategyCombo->addItem("Protective Put", 1);
+    m_strategyCombo->addItem("Iron Condor",    2);
+    m_strategyCombo->setMinimumWidth(130);
+    grid->addWidget(m_strategyCombo, 1, 0);
+
+    // ── Symbol (col 1) ────────────────────────────────────────────────────────
+    grid->addWidget(new QLabel("Symbol", box), 0, 1);
     m_symCombo = new QComboBox(box);
-    // 從 DB 載入可用的 symbol
     for (const auto& sym : m_db->availableSymbols())
         m_symCombo->addItem(sym);
     if (m_symCombo->count() == 0)
         m_symCombo->addItems({"SOXX", "SMH", "QQQI"});
-    m_symCombo->setMinimumWidth(100);
-    grid->addWidget(m_symCombo, 1, 0);
+    m_symCombo->setMinimumWidth(90);
+    grid->addWidget(m_symCombo, 1, 1);
 
     auto dbl = [&](const QString& lbl, double mn, double mx,
                    double v, double step, int dec,
@@ -129,20 +137,30 @@ QWidget* BacktestWidget::buildParamsPanel()
         auto* sb = new QDoubleSpinBox(box);
         sb->setRange(mn,mx); sb->setValue(v);
         sb->setSingleStep(step); sb->setDecimals(dec);
-        sb->setMinimumWidth(100);
+        sb->setMinimumWidth(90);
         grid->addWidget(sb, 1, col);
         return sb;
     };
 
-    m_strikeOff = dbl("Strike offset (OTM %)", 0.001, 0.5,  0.05, 0.01, 2, 1);
-    m_iv        = dbl("Implied vol (σ)",        0.01,  2.0,  0.20, 0.01, 2, 2);
-    m_rfRate    = dbl("Risk-free rate",          0.0,   0.2,  0.05, 0.005,3, 3);
+    m_strikeOff = dbl("Strike offset %", 0.001, 0.5,  0.05, 0.01, 2, 2);
+    m_wingWidth = dbl("Wing width %",    0.01,  0.3,  0.05, 0.01, 2, 3);
+    m_iv        = dbl("Implied vol σ",   0.01,  2.0,  0.20, 0.01, 2, 4);
+    m_rfRate    = dbl("Risk-free r",     0.0,   0.2,  0.05, 0.005,3, 5);
 
-    grid->addWidget(new QLabel("DTE (days)", box), 0, 4);
+    grid->addWidget(new QLabel("DTE (days)", box), 0, 6);
     m_dte = new QSpinBox(box);
     m_dte->setRange(7, 90); m_dte->setValue(30);
-    m_dte->setMinimumWidth(80);
-    grid->addWidget(m_dte, 1, 4);
+    m_dte->setMinimumWidth(70);
+    grid->addWidget(m_dte, 1, 6);
+
+    // Wing width 只在 Iron Condor 時啟用
+    connect(m_strategyCombo, &QComboBox::currentIndexChanged, [this](int idx){
+        m_wingWidth->setEnabled(idx == 2);
+        m_wingWidth->setToolTip(idx == 2
+            ? "Width of the long legs (OTM% beyond short strike)"
+            : "Only used for Iron Condor strategy");
+    });
+    m_wingWidth->setEnabled(false);
 
     // Run button
     m_runBtn = new QPushButton("Run Backtest", box);
@@ -151,11 +169,11 @@ QWidget* BacktestWidget::buildParamsPanel()
         "QPushButton{background:#16a34a;color:white;border-radius:6px;font-weight:500;}"
         "QPushButton:hover{background:#15803d;}"
         "QPushButton:disabled{background:#475569;}");
-    grid->addWidget(m_runBtn, 1, 5);
+    grid->addWidget(m_runBtn, 1, 7);
     connect(m_runBtn, &QPushButton::clicked,
             this, &BacktestWidget::onRunBacktest);
 
-    grid->setColumnStretch(6, 1);
+    grid->setColumnStretch(8, 1);
 
     // Progress bar
     m_progress = new QProgressBar(box);
@@ -285,7 +303,10 @@ void BacktestWidget::onRunBacktest()
     BacktestRequest req;
     req.symbol         = sym;
     req.closePrices    = closes;
+    req.strategy       = static_cast<BacktestRequest::Strategy>(
+                             m_strategyCombo->currentIndex());
     req.strikeOffsetPct= m_strikeOff->value();
+    req.wingWidthPct   = m_wingWidth->value();
     req.dteDays        = m_dte->value();
     req.impliedVol     = m_iv->value();
     req.riskFreeRate   = m_rfRate->value();

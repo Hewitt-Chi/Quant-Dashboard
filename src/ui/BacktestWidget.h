@@ -67,8 +67,11 @@ private:
     DatabaseManager* m_db     = nullptr;
 
     // ── Params ────────────────────────────────────────────────────────────────
-    QComboBox*      m_symCombo    = nullptr;
-    QDoubleSpinBox* m_strikeOff   = nullptr;   // OTM %
+    QComboBox*      m_strategyCombo = nullptr;  // Strategy selector
+    QComboBox*      m_symCombo      = nullptr;
+    QDoubleSpinBox* m_strikeOff     = nullptr;   // OTM %
+    QDoubleSpinBox* m_wingWidth     = nullptr;   // Iron Condor wing width
+    QWidget*        m_wingRow       = nullptr;   // shown only for Iron Condor
     QSpinBox*       m_dte         = nullptr;   // Days to expiry
     QDoubleSpinBox* m_iv          = nullptr;   // Implied vol
     QDoubleSpinBox* m_rfRate      = nullptr;   // Risk-free rate
