@@ -107,22 +107,74 @@ C:\Qt\6.9.3\msvc2022_64
 ## 3. 專案目錄結構
 
 ```
-MyQuantLibApp/                    ← 專案根目錄（即 GitHub repo 根）
+QuantLib-QT/                          ← 專案根目錄（GitHub repo 根）
 │
-├── .gitmodules                   ← git submodule 設定（自動產生）
+├── .gitmodules                        ← git submodule 設定（自動產生）
 ├── .gitignore
-├── CMakeLists.txt                ← 主要建置設定
-├── CMakePresets.json             ← VS2022 建置 preset
-├── CMakeUserPresets.json         ← 本機 Qt 路徑覆寫（不提交到 git）
-├── vcpkg.json                    ← vcpkg manifest（相依套件清單）
-├── vcpkg-configuration.json      ← vcpkg baseline 版本鎖定
+├── CMakeLists.txt                     ← 主要建置設定
+├── CMakePresets.json                  ← VS2022 建置 preset
+├── CMakeUserPresets.json              ← 本機 Qt 路徑覆寫（不提交到 git）
+├── vcpkg.json                         ← vcpkg manifest（QuantLib、Boost 等）
+├── vcpkg-configuration.json          ← vcpkg baseline 版本鎖定
 │
-├── vcpkg/                        ← git submodule（vcpkg 本體）
+├── app.rc                             ← Windows exe 圖示資源（IDI_ICON1）
+├── app_icon.ico                       ← 應用程式圖示
+├── resources.qrc                      ← Qt 資源檔（嵌入 icon 進 exe）
+├── deploy.bat                         ← Release 一鍵打包腳本（windeployqt）
 │
-├── main.cpp                      ← 程式進入點
-├── QuantLibQT.cpp                ← 主視窗實作
-├── QuantLibQT.h                  ← 主視窗標頭
-└── QuantLibQT.ui                 ← Qt Designer UI 檔
+├── vcpkg/                             ← git submodule（vcpkg 本體）
+│
+└── src/                               ← 所有原始碼
+    │
+    ├── main.cpp                       ← 程式進入點（QApplication + MainWindow）
+    │
+    ├── infra/                         ← 基礎設施層（無 UI 依賴）
+    │   ├── AppSettings.h/.cpp         ← QSettings 包裝器（全域設定單例）
+    │   ├── AsyncWorker.h/.cpp         ← QtConcurrent 背景計算引擎
+    │   │                                  PricingRequest / BacktestRequest
+    │   │                                  OptionChainRequest / YieldCurveResult
+    │   │                                  VolSurfaceResult / OptionChainResult
+    │   ├── DatabaseManager.h/.cpp     ← SQLite OHLCV 快取（QSqlDatabase WAL）
+    │   └── QuoteFetcher.h/.cpp        ← 行情抓取（Yahoo Finance / Polygon.io）
+    │                                      crumb/cookie 認證 + chart fallback
+    │
+    └── ui/                            ← UI 層（Qt Widgets）
+        ├── QuantMainDlg.h/.cpp          ← 主視窗：導覽列 + QStackedWidget
+        │
+        ├── WatchlistWidget.h/.cpp     ← MARKET → 即時報價 + Sparkline
+        │
+        ├── PricerWidget.h/.cpp        ← ANALYSIS → 選擇權定價
+        │                                  BSM / Binomial / Heston
+        │                                  Greeks cards + 十字準線
+        │                                  Tab1: Greek vs Spot
+        │                                  Tab2: Vol Smile（BSM bisection IV）
+        │                                  Tab3: BSM vs Heston 對比
+        │
+        ├── YieldCurveWidget.h/.cpp    ← ANALYSIS → 殖利率曲線
+        │                                  QuantLib PiecewiseYieldCurve bootstrap
+        │                                  Spot / Zero / Forward（3M smooth）
+        │                                  情境分析：平移 / 扭轉 / 蝶形
+        │                                  Export CSV
+        │
+        ├── OptionChainWidget.h/.cpp   ← ANALYSIS → 選擇權鏈掃描
+        │                                  Call/Put Price/Delta/IV × 21 Strikes
+        │                                  ATM 標黃 + IV Smile 圖
+        │
+        ├── VolSurfaceWidget.h/.cpp    ← ANALYSIS → IV 曲面 3D（選用）
+        │                                  Qt DataVisualization Q3DSurface
+        │                                  需要 Qt DataVisualization + Vulkan SDK
+        │
+        ├── BacktestWidget.h/.cpp      ← STRATEGY → 回測引擎
+        │                                  5 種策略：
+        │                                    Covered Call / Protective Put
+        │                                    Iron Condor / Collar / Cash-Secured Put
+        │                                  PnL vs B&H + Drawdown 比較圖
+        │                                  Trade log（含 assignment 標紅）
+        │
+        └── SettingsWidget.h/.cpp      ← SYSTEM → 全域設定
+                                           Quote provider（Yahoo / Polygon）
+                                           API key / Refresh 間隔
+                                           Pricing 預設值 / DB 路徑
 ```
 
 > **注意：** 原始碼直接放在專案根目錄（Qt Wizard 產生的預設結構），不一定需要 `src/` 子目錄。`CMakeLists.txt` 中的路徑需與實際檔案位置一致。
@@ -226,82 +278,123 @@ git -C vcpkg rev-parse HEAD
 以下是**完整且正確**的 `CMakeLists.txt`，整合了所有已知問題的修正：
 
 ```cmake
-# ══════════════════════════════════════════════════════════════════════════════
-# 重要：vcpkg toolchain 與 triplet 必須在 project() 之前設定
-# ══════════════════════════════════════════════════════════════════════════════
+# ── 必須是檔案的第一行有效程式碼 ──────────────────────────────────────────
 if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     set(CMAKE_TOOLCHAIN_FILE
         "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake"
         CACHE STRING "vcpkg toolchain")
 endif()
-
-# QuantLib 在 vcpkg 只支援靜態連結，必須使用 x64-windows-static
 set(VCPKG_TARGET_TRIPLET "x64-windows-static" CACHE STRING "" FORCE)
 
-# ══════════════════════════════════════════════════════════════════════════════
 cmake_minimum_required(VERSION 3.25)
 
-# CMP0091 必須在 project() 之前設定，讓 CMAKE_MSVC_RUNTIME_LIBRARY 生效
-cmake_policy(SET CMP0091 NEW)
+message(STATUS "CMAKE_TOOLCHAIN_FILE = ${CMAKE_TOOLCHAIN_FILE}")
+message(STATUS "VCPKG_INSTALLED_DIR = ${VCPKG_INSTALLED_DIR}")
 
 # ── 專案名稱與語言 ─────────────────────────────────────────────────────────────
-project(QuantLibQT LANGUAGES CXX)
+project(MyQuantLibApp LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-# ── MSVC Runtime Library（必須與 vcpkg x64-windows-static 一致）────────────
-# vcpkg static triplet 使用 /MT (MultiThreaded Static)
-# 若不設定此項，Qt（動態）與 QuantLib（靜態）會產生 LNK2038 runtime mismatch 錯誤
+# 讓 MSVC runtime 與 vcpkg x64-windows-static 一致
 if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
-# ── 原始碼編碼（處理中文註解的 C4828 警告）──────────────────────────────────
-if(MSVC)
-    add_compile_options(/utf-8)
-endif()
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
+set(CMAKE_AUTOUIC ON)
+# Example CMakePresets.json:
+# {
+#   "version": 3,
+#   "configurePresets": [{
+#     "name": "default",
+#     "cacheVariables": {
+#       "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+#     }
+#   }]
+# }
 
 # ── Qt 設定 ───────────────────────────────────────────────────────────────────
+# 啟用 Qt 自動化工具
 set(CMAKE_AUTOMOC ON)    # 自動處理 Q_OBJECT
 set(CMAKE_AUTORCC ON)    # 自動處理 .qrc 資源檔
 set(CMAKE_AUTOUIC ON)    # 自動處理 .ui 檔
 
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Charts)
+# 尋找 Qt6（需設定 CMAKE_PREFIX_PATH 或環境變數 Qt6_DIR）
+find_package(Qt6 COMPONENTS Core Widgets Charts Network Sql Concurrent REQUIRED)
 
-# ── QuantLib（由 vcpkg 管理，Boost 隨 QuantLib 自動安裝）────────────────────
+# ── Boost（由 vcpkg 管理，缺少時自動安裝）───────────────────────────────────
+#find_package(Boost REQUIRED COMPONENTS date_time math_c99)
+
+# ── QuantLib（由 vcpkg 管理）─────────────────────────────────────────────────
 find_package(QuantLib CONFIG REQUIRED)
 
-# ── 原始碼（路徑以 CMAKE_CURRENT_SOURCE_DIR 明確指定，避免路徑解析錯誤）──────
-set(SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/QuantLibQT.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/QuantLibQT.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/QuantLibQT.ui
+# ── 原始碼 ────────────────────────────────────────────────────────────────────
+# ── Sources ───────────────────────────────────────────────────────────────────
+set(INFRA_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/AppSettings.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/AppSettings.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/AsyncWorker.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/AsyncWorker.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/DatabaseManager.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/DatabaseManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/QuoteFetcher.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/infra/QuoteFetcher.cpp
 )
+
+set(UI_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/QuantMainDlg.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/QuantMainDlg.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/PricerWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/PricerWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/PricerWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/WatchlistWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/WatchlistWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/BacktestWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/BacktestWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/SettingsWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/SettingsWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/YieldCurveWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/YieldCurveWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/OptionChainWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/OptionChainWidget.cpp
+)
+
+if(WIN32)
+    set(PLATFORM_SOURCES app.rc)
+endif()
 
 # ── 建置目標 ──────────────────────────────────────────────────────────────────
-qt_add_executable(QuantLibQT
-    ${SOURCES}
+qt_add_executable(Quant-Dashboard
+    src/main.cpp
+    ${INFRA_SOURCES}
+    ${UI_SOURCES}
+    ${PLATFORM_SOURCES}
+    resources.qrc  
 )
 
-# ── 連結函式庫 ────────────────────────────────────────────────────────────────
-# 不需要單獨連結 Boost，QuantLib::QuantLib 已包含所需的 Boost
-target_link_libraries(QuantLibQT PRIVATE
+target_link_libraries(Quant-Dashboard PRIVATE
     Qt6::Core
     Qt6::Widgets
     Qt6::Charts
+    Qt6::Network      # ← 確認這行存在
+    Qt6::Sql
+    Qt6::Concurrent
     QuantLib::QuantLib
 )
 
-# ── 部署（Windows：自動複製 Qt DLL）─────────────────────────────────────────
+if(MSVC)
+    target_compile_options(Quant-Dashboard PRIVATE /utf-8)
+endif()
+
 find_program(WINDEPLOYQT windeployqt HINTS "${Qt6_DIR}/../../../bin")
 if(WINDEPLOYQT)
-    add_custom_command(TARGET QuantLibQT POST_BUILD
+    add_custom_command(TARGET Quant-Dashboard POST_BUILD
         COMMAND ${WINDEPLOYQT}
             --no-translations
-            "$<TARGET_FILE:QuantLibQT>"
-        COMMENT "Deploying Qt runtime DLLs..."
+            "$<TARGET_FILE:Quant-Dashboard>"
+        COMMENT "Deploying Qt DLLs..."
     )
 endif()
 ```
