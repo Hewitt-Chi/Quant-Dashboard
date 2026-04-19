@@ -24,6 +24,14 @@ AsyncWorker::AsyncWorker(QObject* parent)
     m_yieldWatcher = new QFutureWatcher<YieldCurveResult>(this);
     connect(m_yieldWatcher, &QFutureWatcher<YieldCurveResult>::finished,
             this, [this]() { emit yieldCurveFinished(m_yieldWatcher->result()); });
+
+    m_chainWatcher = new QFutureWatcher<OptionChainResult>(this);
+    connect(m_chainWatcher, &QFutureWatcher<OptionChainResult>::finished,
+            this, [this]() { emit optionChainFinished(m_chainWatcher->result()); });
+
+    m_surfaceWatcher = new QFutureWatcher<VolSurfaceResult>(this);
+    connect(m_surfaceWatcher, &QFutureWatcher<VolSurfaceResult>::finished,
+            this, [this]() { emit volSurfaceFinished(m_surfaceWatcher->result()); });
 }
 
 AsyncWorker::~AsyncWorker()
@@ -46,6 +54,20 @@ void AsyncWorker::submitBacktest(const BacktestRequest& req)
         QtConcurrent::run([req, this]() { return computeBacktest(req, this); }));
 }
 
+void AsyncWorker::submitOptionChain(const OptionChainRequest& req)
+{
+    if (m_chainWatcher->isRunning()) m_chainWatcher->cancel();
+    m_chainWatcher->setFuture(
+        QtConcurrent::run([req]() { return computeOptionChain(req); }));
+}
+
+void AsyncWorker::submitVolSurface(const OptionChainRequest& req)
+{
+    if (m_surfaceWatcher->isRunning()) m_surfaceWatcher->cancel();
+    m_surfaceWatcher->setFuture(
+        QtConcurrent::run([req]() { return computeVolSurface(req); }));
+}
+
 void AsyncWorker::submitYieldCurve(const QVector<TenorRate>& tenors, double riskFreeRate)
 {
     if (m_yieldWatcher->isRunning()) m_yieldWatcher->cancel();
@@ -64,7 +86,9 @@ void AsyncWorker::cancelAll()
 
 bool AsyncWorker::isBusy() const
 {
-    return m_pricingWatcher->isRunning() || m_backtestWatcher->isRunning() || m_yieldWatcher->isRunning();
+    return m_pricingWatcher->isRunning() || m_backtestWatcher->isRunning()
+        || m_yieldWatcher->isRunning() || m_chainWatcher->isRunning()
+        || m_surfaceWatcher->isRunning();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -386,6 +410,186 @@ YieldCurveResult AsyncWorker::computeYieldCurve(QVector<TenorRate> tenors,
             double sum = 0.0;
             for (int j = lo; j <= hi; ++j) sum += result.forwardRates[j];
             result.smoothedForwardRates[i] = sum / (hi - lo + 1);
+        }
+
+        result.success = true;
+    } catch (const std::exception& e) {
+        result.success  = false;
+        result.errorMsg = QString::fromStdString(e.what());
+    }
+    return result;
+}
+
+// =============================================================================
+// computeOptionChain — 掃描多個 Strike，計算 Call/Put 價格、Greeks、Implied Vol
+// =============================================================================
+OptionChainResult AsyncWorker::computeOptionChain(OptionChainRequest req)
+{
+    OptionChainResult result;
+    try {
+        DayCounter dc    = Actual365Fixed();
+        Calendar   cal   = NullCalendar();
+        Date       today = Date::todaysDate();
+        Settings::instance().evaluationDate() = today;
+
+        Date exDate = today + static_cast<int>(req.maturityYears * 365);
+
+        // Bisection implied vol solver
+        auto solveIV = [&](double mktPrice, double strike,
+                           Option::Type ot) -> double {
+            double lo = 1e-4, hi = 5.0;
+            for (int it = 0; it < 80; ++it) {
+                double mid = (lo + hi) / 2.0;
+                Handle<Quote>              sH(boost::make_shared<SimpleQuote>(req.spot));
+                Handle<YieldTermStructure> rH(boost::make_shared<FlatForward>(today, req.riskFree, dc));
+                Handle<YieldTermStructure> dH(boost::make_shared<FlatForward>(today, req.dividendYield, dc));
+                Handle<BlackVolTermStructure> vH(boost::make_shared<BlackConstantVol>(today, cal, mid, dc));
+                auto proc = boost::make_shared<BlackScholesMertonProcess>(sH, dH, rH, vH);
+                auto pay  = boost::make_shared<PlainVanillaPayoff>(ot, strike);
+                auto ex   = boost::make_shared<EuropeanExercise>(exDate);
+                VanillaOption opt(pay, ex);
+                opt.setPricingEngine(boost::make_shared<AnalyticEuropeanEngine>(proc));
+                double p = opt.NPV();
+                if (p > mktPrice) hi = mid; else lo = mid;
+                if (hi - lo < 1e-6) break;
+            }
+            return (lo + hi) / 2.0 * 100.0;
+        };
+
+        // Pricing helper
+        auto price = [&](double strike, Option::Type ot) -> PricingResult {
+            Handle<Quote>              sH(boost::make_shared<SimpleQuote>(req.spot));
+            Handle<YieldTermStructure> rH(boost::make_shared<FlatForward>(today, req.riskFree, dc));
+            Handle<YieldTermStructure> dH(boost::make_shared<FlatForward>(today, req.dividendYield, dc));
+            Handle<BlackVolTermStructure> vH(boost::make_shared<BlackConstantVol>(today, cal, req.baseVol, dc));
+            auto proc = boost::make_shared<BlackScholesMertonProcess>(sH, dH, rH, vH);
+            auto pay  = boost::make_shared<PlainVanillaPayoff>(ot, strike);
+            auto ex   = boost::make_shared<EuropeanExercise>(exDate);
+            VanillaOption opt(pay, ex);
+            opt.setPricingEngine(boost::make_shared<AnalyticEuropeanEngine>(proc));
+            PricingResult r;
+            r.success = true;
+            r.price   = opt.NPV();
+            r.delta   = opt.delta();
+            r.gamma   = opt.gamma();
+            r.vega    = opt.vega();
+            r.theta   = opt.theta();
+            return r;
+        };
+
+        double sMin = req.spot * req.strikeMin;
+        double sMax = req.spot * req.strikeMax;
+        double step = (sMax - sMin) / req.strikeSteps;
+
+        // 找最近 ATM strike index
+        int atmIdx = 0;
+        double minDist = 1e18;
+
+        for (int i = 0; i <= req.strikeSteps; ++i) {
+            double K = sMin + step * i;
+            auto callR = price(K, Option::Call);
+            auto putR  = price(K, Option::Put);
+
+            OptionChainRow row;
+            row.strike    = K;
+            row.callPrice = callR.price;
+            row.callDelta = callR.delta;
+            row.callIV    = solveIV(callR.price, K, Option::Call);
+            row.putPrice  = putR.price;
+            row.putDelta  = putR.delta;
+            row.putIV     = solveIV(putR.price, K, Option::Put);
+            row.gamma     = callR.gamma;
+            row.vega      = callR.vega;
+            row.theta     = callR.theta;
+
+            result.rows.append(row);
+
+            double dist = std::abs(K - req.spot);
+            if (dist < minDist) { minDist = dist; atmIdx = i; }
+        }
+        if (atmIdx < result.rows.size())
+            result.rows[atmIdx].isATM = true;
+
+        result.success = true;
+    } catch (const std::exception& e) {
+        result.success  = false;
+        result.errorMsg = QString::fromStdString(e.what());
+    }
+    return result;
+}
+
+// =============================================================================
+// computeVolSurface — 二維 Implied Vol 曲面（Strike × Maturity）
+// =============================================================================
+VolSurfaceResult AsyncWorker::computeVolSurface(OptionChainRequest req)
+{
+    VolSurfaceResult result;
+    try {
+        DayCounter dc    = Actual365Fixed();
+        Calendar   cal   = NullCalendar();
+        Date       today = Date::todaysDate();
+        Settings::instance().evaluationDate() = today;
+
+        // X 軸：Strike（相對於 Spot 的比例，0.70 - 1.30）
+        const int nK = 13;
+        const double kMin = 0.70, kMax = 1.30;
+        for (int i = 0; i < nK; ++i)
+            result.strikes.append(req.spot * (kMin + (kMax-kMin)*i/(nK-1)));
+
+        // Z 軸：Maturity（7D/14D/1M/2M/3M/6M/9M/1Y/18M/2Y）
+        QVector<double> tenorMonths = {0.23,0.46,1,2,3,6,9,12,18,24};
+        for (double m : tenorMonths)
+            result.maturities.append(m / 12.0);
+
+        result.impliedVols.resize(result.maturities.size() * result.strikes.size());
+
+        // Bisection IV
+        auto solveIV = [&](double mktP, double K, double T) -> double {
+            Date exD = today + static_cast<int>(T * 365);
+            double lo = 1e-4, hi = 5.0;
+            for (int it = 0; it < 60; ++it) {
+                double mid = (lo + hi) / 2.0;
+                Handle<Quote>              sH(boost::make_shared<SimpleQuote>(req.spot));
+                Handle<YieldTermStructure> rH(boost::make_shared<FlatForward>(today, req.riskFree, dc));
+                Handle<YieldTermStructure> dH(boost::make_shared<FlatForward>(today, req.dividendYield, dc));
+                Handle<BlackVolTermStructure> vH(boost::make_shared<BlackConstantVol>(today, cal, mid, dc));
+                auto proc = boost::make_shared<BlackScholesMertonProcess>(sH, dH, rH, vH);
+                VanillaOption opt(
+                    boost::make_shared<PlainVanillaPayoff>(Option::Call, K),
+                    boost::make_shared<EuropeanExercise>(exD));
+                opt.setPricingEngine(boost::make_shared<AnalyticEuropeanEngine>(proc));
+                if (opt.NPV() > mktP) hi = mid; else lo = mid;
+                if (hi - lo < 1e-6) break;
+            }
+            return (lo + hi) / 2.0 * 100.0;
+        };
+
+        for (int ti = 0; ti < result.maturities.size(); ++ti) {
+            double T    = result.maturities[ti];
+            Date   exD  = today + static_cast<int>(T * 365);
+            for (int ki = 0; ki < result.strikes.size(); ++ki) {
+                double K = result.strikes[ki];
+                // BSM price with base vol, then solve IV (will equal baseVol for flat surface)
+                // In real usage, substitute market prices here
+                Handle<Quote>              sH(boost::make_shared<SimpleQuote>(req.spot));
+                Handle<YieldTermStructure> rH(boost::make_shared<FlatForward>(today, req.riskFree, dc));
+                Handle<YieldTermStructure> dH(boost::make_shared<FlatForward>(today, req.dividendYield, dc));
+
+                // 加入 skew + term structure（模擬真實 smile 形狀）
+                double moneyness = K / req.spot;
+                double skew  = -0.10 * (moneyness - 1.0);          // OTM put premium
+                double term  =  0.02 * std::sqrt(T);                // term structure
+                double adjVol = qMax(0.05, req.baseVol + skew + term);
+
+                Handle<BlackVolTermStructure> vH(boost::make_shared<BlackConstantVol>(today, cal, adjVol, dc));
+                auto proc = boost::make_shared<BlackScholesMertonProcess>(sH, dH, rH, vH);
+                VanillaOption opt(
+                    boost::make_shared<PlainVanillaPayoff>(Option::Call, K),
+                    boost::make_shared<EuropeanExercise>(exD));
+                opt.setPricingEngine(boost::make_shared<AnalyticEuropeanEngine>(proc));
+                double iv = solveIV(opt.NPV(), K, T);
+                result.impliedVols[ti * result.strikes.size() + ki] = iv;
+            }
         }
 
         result.success = true;

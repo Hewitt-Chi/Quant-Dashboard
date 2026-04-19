@@ -51,6 +51,61 @@ struct PricingRequest
     double rho_h   = -0.7;   // 相關係數
 };
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OptionChainRow — 選擇權鏈的單一行（一個 Strike）
+// ─────────────────────────────────────────────────────────────────────────────
+struct OptionChainRow
+{
+    double strike      = 0.0;
+    // Call
+    double callPrice   = 0.0;
+    double callDelta   = 0.0;
+    double callIV      = 0.0;   // Implied vol %
+    // Put
+    double putPrice    = 0.0;
+    double putDelta    = 0.0;
+    double putIV       = 0.0;
+    // Shared
+    double gamma       = 0.0;
+    double vega        = 0.0;
+    double theta       = 0.0;
+    bool   isATM       = false; // 最接近 Spot 的 Strike
+};
+
+struct OptionChainRequest
+{
+    double spot          = 100.0;
+    double riskFree      = 0.05;
+    double dividendYield = 0.0;
+    double maturityYears = 30.0 / 365.0;
+    double baseVol       = 0.20;
+    double strikeMin     = 0.70;  // Spot 的倍數
+    double strikeMax     = 1.30;
+    int    strikeSteps   = 20;    // 幾個 Strike
+};
+
+struct OptionChainResult
+{
+    bool    success = false;
+    QString errorMsg;
+    QVector<OptionChainRow> rows;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VolSurfaceResult — Implied Vol 曲面（Strike × Maturity 二維網格）
+// ─────────────────────────────────────────────────────────────────────────────
+struct VolSurfaceResult
+{
+    bool    success = false;
+    QString errorMsg;
+
+    QVector<double> strikes;     // X 軸
+    QVector<double> maturities;  // Z 軸（年）
+    // Y 值：vol[i * strikes.size() + j] = implied vol at maturity[i], strike[j]
+    QVector<double> impliedVols;
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // BacktestRequest / BacktestResult
 // ─────────────────────────────────────────────────────────────────────────────
@@ -143,29 +198,44 @@ public:
     // 提交殖利率曲線計算（非阻塞）
     void submitYieldCurve(const QVector<TenorRate>& tenors, double riskFreeRate);
 
+    // 提交選擇權鏈計算（非阻塞）
+    void submitOptionChain(const OptionChainRequest& req);
+
+    // 提交 Implied Vol 曲面計算（非阻塞）
+    void submitVolSurface(const OptionChainRequest& req);
+
     // 取消所有進行中的工作
     void cancelAll();
 
     // 是否有工作正在執行
     bool isBusy() const;
 
-    // 同步計算（UI thread 少量呼叫用，例如畫 Greeks 曲線）
+    // 同步計算（UI thread 少量呼叫用）
     static PricingResult staticComputePricing(const PricingRequest& req)
     { return computePricing(req); }
+
+    static YieldCurveResult staticComputeYieldCurve(const QVector<TenorRate>& t, double rf)
+    { return computeYieldCurve(t, rf); }
 
 signals:
     void pricingFinished(const PricingResult& result);
     void backtestFinished(const BacktestResult& result);
     void yieldCurveFinished(const YieldCurveResult& result);
+    void optionChainFinished(const OptionChainResult& result);
+    void volSurfaceFinished(const VolSurfaceResult& result);
     void progressUpdated(int percent);   // 回測進度 0–100
 
 private:
     // 靜態計算函式（在 worker thread 執行，無 Qt 物件限制）
     static PricingResult     computePricing(PricingRequest req);
     static BacktestResult    computeBacktest(BacktestRequest req, AsyncWorker* self);
-    static YieldCurveResult  computeYieldCurve(QVector<TenorRate> tenors, double rf);
+    static YieldCurveResult   computeYieldCurve(QVector<TenorRate> tenors, double rf);
+    static OptionChainResult  computeOptionChain(OptionChainRequest req);
+    static VolSurfaceResult   computeVolSurface(OptionChainRequest req);
 
     QFutureWatcher<PricingResult>*    m_pricingWatcher   = nullptr;
     QFutureWatcher<BacktestResult>*   m_backtestWatcher  = nullptr;
-    QFutureWatcher<YieldCurveResult>* m_yieldWatcher     = nullptr;
+    QFutureWatcher<YieldCurveResult>*   m_yieldWatcher   = nullptr;
+    QFutureWatcher<OptionChainResult>*  m_chainWatcher   = nullptr;
+    QFutureWatcher<VolSurfaceResult>*   m_surfaceWatcher = nullptr;
 };
