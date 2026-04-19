@@ -376,6 +376,18 @@ YieldCurveResult AsyncWorker::computeYieldCurve(QVector<TenorRate> tenors,
                 curve->zeroRate(d, dc, Continuous).rate() * 100.0);
         }
 
+        // ── Forward rate 3M 移動平均平滑 ────────────────────────────────────
+        const int W = 3;  // window = 3 個月
+        const int N = result.forwardRates.size();
+        result.smoothedForwardRates.resize(N);
+        for (int i = 0; i < N; ++i) {
+            int lo = qMax(0, i - W/2);
+            int hi = qMin(N-1, i + W/2);
+            double sum = 0.0;
+            for (int j = lo; j <= hi; ++j) sum += result.forwardRates[j];
+            result.smoothedForwardRates[i] = sum / (hi - lo + 1);
+        }
+
         result.success = true;
     } catch (const std::exception& e) {
         result.success  = false;

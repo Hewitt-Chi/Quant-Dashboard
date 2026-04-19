@@ -70,9 +70,10 @@ struct YieldCurveResult
 
     QVector<double> maturitiesYears;  // X 軸：期限（年）
     QVector<double> spotRates;        // 即期利率（%）
-    QVector<double> forwardRates;     // 1 年遠期利率（%）
-    QVector<double> discountFactors;  // 折現因子
-    QVector<double> zeroRates;        // 零息利率（%）
+    QVector<double> forwardRates;         // 1M 瞬間遠期利率（%）
+    QVector<double> smoothedForwardRates; // 3M 移動平均平滑版
+    QVector<double> discountFactors;      // 折現因子
+    QVector<double> zeroRates;            // 零息利率（%）
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
