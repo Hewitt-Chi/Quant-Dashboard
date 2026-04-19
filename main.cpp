@@ -8,6 +8,8 @@ int main(int argc, char* argv[])
     app.setOrganizationName("Quant-Dashboard");
     app.setStyle("Fusion");
 
+    app.setWindowIcon(QIcon(":/app_icon.ico"));
+
     QuantMainDlg w;
     w.show();
     return app.exec();
