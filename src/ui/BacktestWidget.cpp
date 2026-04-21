@@ -123,9 +123,11 @@ QWidget* BacktestWidget::buildParamsPanel()
     // ── Strategy 選擇 (col 0) ────────────────────────────────────────────────
     grid->addWidget(new QLabel("Strategy", box), 0, 0);
     m_strategyCombo = new QComboBox(box);
-    m_strategyCombo->addItem("Covered Call",   0);
-    m_strategyCombo->addItem("Protective Put", 1);
-    m_strategyCombo->addItem("Iron Condor",    2);
+    m_strategyCombo->addItem("Covered Call",      0);
+    m_strategyCombo->addItem("Protective Put",   1);
+    m_strategyCombo->addItem("Iron Condor",      2);
+    m_strategyCombo->addItem("Collar",           3);
+    m_strategyCombo->addItem("Cash-Secured Put", 4);
     m_strategyCombo->setMinimumWidth(130);
     grid->addWidget(m_strategyCombo, 1, 0);
 
@@ -164,7 +166,7 @@ QWidget* BacktestWidget::buildParamsPanel()
 
     // Wing width 只在 Iron Condor 時啟用
     connect(m_strategyCombo, &QComboBox::currentIndexChanged, [this](int idx){
-        m_wingWidth->setEnabled(idx == 2);
+        m_wingWidth->setEnabled(idx == 2);   // Iron Condor only
         m_wingWidth->setToolTip(idx == 2
             ? "Width of the long legs (OTM% beyond short strike)"
             : "Only used for Iron Condor strategy");
@@ -441,12 +443,18 @@ void BacktestWidget::onBacktestFinished(const BacktestResult& result)
         "peak to trough",
         false);
 
-    bool isProtPut2 = (m_strategyCombo->currentIndex() == 1);
-    if (isProtPut2) {
+    int  si = m_strategyCombo->currentIndex();
+    bool isProtPut2 = (si == 1);
+    if (isProtPut2 || si == 3) {
         m_cardPremium->setValue(
             QString("$%1").arg(qAbs(result.premiumCollected),0,'f',2),
-            "insurance cost",
-            false);  // 保護成本 = 負面
+            si == 3 ? "net collar cost" : "insurance cost",
+            false);
+    } else if (si == 4) {
+        m_cardPremium->setValue(
+            QString("$%1").arg(result.premiumCollected,0,'f',2),
+            "put premium earned",
+            true);
     } else {
         m_cardPremium->setValue(
             QString("$%1").arg(result.premiumCollected,0,'f',2),
@@ -469,9 +477,12 @@ void BacktestWidget::onBacktestFinished(const BacktestResult& result)
 
     // 根據策略更新 series 名稱
     switch (result.assignmentEvents.size() > 0 ? 0 : 0) { default: break; }
-    QString stratLabel =
-        m_strategyCombo->currentIndex() == 0 ? "Covered call" :
-        m_strategyCombo->currentIndex() == 1 ? "Protective put" : "Iron condor";
+    static const QStringList stratLabels = {
+        "Covered call", "Protective put", "Iron condor", "Collar", "Cash-secured put"
+    };
+    int stratIdx = m_strategyCombo->currentIndex();
+    QString stratLabel = (stratIdx >= 0 && stratIdx < stratLabels.size())
+        ? stratLabels[stratIdx] : "Strategy";
     m_seriesCC->setName(stratLabel);
 
     m_seriesCC->replace(ccPts);
@@ -479,8 +490,9 @@ void BacktestWidget::onBacktestFinished(const BacktestResult& result)
 
     // Protective Put：顯示 Drawdown 比較圖
     bool isProtPut = (m_strategyCombo->currentIndex() == 1);
-    m_ddPanel->setVisible(isProtPut);
-    if (isProtPut) updateDrawdownChart(result);
+    bool isCollar  = (m_strategyCombo->currentIndex() == 3);
+    m_ddPanel->setVisible(isProtPut || isCollar);
+    if (isProtPut || isCollar) updateDrawdownChart(result);
 
     // 軸範圍：取 CC + BH 兩條線的合併 min/max
     auto axX = m_chart->axes(Qt::Horizontal);
