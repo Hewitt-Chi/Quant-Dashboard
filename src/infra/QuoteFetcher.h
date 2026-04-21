@@ -75,6 +75,7 @@ private:
     // ── Yahoo Finance ─────────────────────────────────────────────────────────
     void fetchYahooQuote(const QString& symbol);
     void fetchYahooHistory(const QString& symbol, const QString& range);
+    void fetchYahooQuoteFallback(const QString& symbol);  // chart endpoint fallback
     void parseYahooQuote(QNetworkReply* reply, const QString& symbol);
     void parseYahooHistory(QNetworkReply* reply, const QString& symbol);
 
@@ -86,6 +87,16 @@ private:
 
     QNetworkAccessManager* m_nam      = nullptr;
     QTimer*                m_timer    = nullptr;
+
+    // Yahoo Finance crumb/cookie（解決 401 問題）
+    QString m_crumb;            // Yahoo Finance crumb token
+    QString m_cookie;           // Yahoo Finance session cookie
+    bool    m_crumbReady = false;
+    QStringList m_pendingSymbols; // 等待 crumb 就緒後的佇列
+
+    void fetchYahooCrumb();      // Step 1：取得 cookie + crumb
+    void onCrumbReady(const QString& crumb, const QString& cookie);
+    void flushPendingQuotes();   // crumb 就緒後發送佇列中的請求
     Provider               m_provider = Provider::Yahoo;
     QString                m_apiKey;
     QStringList            m_watchList;

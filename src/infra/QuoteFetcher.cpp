@@ -69,34 +69,154 @@ void QuoteFetcher::fetchHistory(const QString& symbol, const QString& range)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Yahoo Finance — 即時報價
+// Yahoo Finance — 即時報價（v8 + crumb/cookie 認證）
 //
-// v8/finance/quote 的 JSON 欄位被 Yahoo 包進 "body" 結構，直接抓常被回空值。
-// 改用 chart endpoint（range=5d interval=1d）取最近兩根 K 線算漲跌，
-// 這個 endpoint 不需要 cookie / crumb，穩定可靠。
+// 新版 Yahoo Finance 需要 crumb token + session cookie 才能存取 v8/finance/quote。
+// 流程：
+//   1. 先 GET https://finance.yahoo.com 取得 cookie
+//   2. 用 cookie GET /v1/test/csrfToken 取得 crumb
+//   3. 之後每次報價都在 URL 帶 crumb 參數
 // ─────────────────────────────────────────────────────────────────────────────
+
+void QuoteFetcher::fetchYahooCrumb()
+{
+    // Step 1：取得 Yahoo session cookie
+    QNetworkRequest req(QUrl("https://finance.yahoo.com/"));
+    req.setHeader(QNetworkRequest::UserAgentHeader,
+                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                  "AppleWebKit/537.36 Chrome/124.0 Safari/537.36");
+    req.setRawHeader("Accept", "text/html,application/xhtml+xml");
+    req.setRawHeader("Accept-Language", "en-US,en;q=0.9");
+
+    auto* reply = m_nam->get(req);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+
+        // 取得 Set-Cookie header
+        QByteArray cookieHeader = reply->rawHeader("Set-Cookie");
+        if (!cookieHeader.isEmpty()) {
+            // 只取第一個 cookie（通常是 A1 session）
+            m_cookie = QString::fromUtf8(cookieHeader.split(';').first());
+        }
+
+        // Step 2：取得 crumb token
+        QNetworkRequest crumbReq(
+            QUrl("https://query1.finance.yahoo.com/v1/test/csrfToken"));
+        crumbReq.setHeader(QNetworkRequest::UserAgentHeader,
+                           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 Chrome/124.0 Safari/537.36");
+        crumbReq.setRawHeader("Accept", "text/plain");
+        if (!m_cookie.isEmpty())
+            crumbReq.setRawHeader("Cookie", m_cookie.toUtf8());
+
+        auto* crumbReply = m_nam->get(crumbReq);
+        connect(crumbReply, &QNetworkReply::finished, this, [this, crumbReply]() {
+            crumbReply->deleteLater();
+            QString crumb = QString::fromUtf8(crumbReply->readAll()).trimmed();
+            if (!crumb.isEmpty() && crumb.length() < 50) {
+                m_crumb      = crumb;
+                m_crumbReady = true;
+                flushPendingQuotes();
+            }
+            // crumb 取得失敗就 fallback 到 chart endpoint
+        });
+    });
+}
+
+void QuoteFetcher::flushPendingQuotes()
+{
+    for (const auto& sym : m_pendingSymbols)
+        fetchYahooQuote(sym);
+    m_pendingSymbols.clear();
+}
+
 void QuoteFetcher::fetchYahooQuote(const QString& symbol)
 {
-    QUrl url(QString("https://query1.finance.yahoo.com/v8/finance/chart/%1")
-             .arg(symbol));
+    // 如果 crumb 還沒準備好，先加到佇列，同時用 chart endpoint 立即回傳一筆
+    if (!m_crumbReady) {
+        if (!m_pendingSymbols.contains(symbol))
+            m_pendingSymbols.append(symbol);
+        if (m_crumb.isEmpty())
+            fetchYahooCrumb();   // 只啟動一次
+        // Fallback：用 chart endpoint 先給一個值
+        fetchYahooQuoteFallback(symbol);
+        return;
+    }
+
+    // crumb 就緒：用 v8 quote API（有盤中即時價格）
+    QUrl url("https://query2.finance.yahoo.com/v8/finance/quote");
     QUrlQuery q;
-    q.addQueryItem("range",    "5d");
+    q.addQueryItem("symbols", symbol);
+    q.addQueryItem("crumb",   m_crumb);
+    q.addQueryItem("fields",  "regularMarketPrice,regularMarketChange,"
+                              "regularMarketChangePercent,regularMarketVolume,"
+                              "regularMarketTime");
+    url.setQuery(q);
+
+    QNetworkRequest req(url);
+    req.setHeader(QNetworkRequest::UserAgentHeader,
+                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                  "AppleWebKit/537.36 Chrome/124.0 Safari/537.36");
+    req.setRawHeader("Accept",          "application/json");
+    req.setRawHeader("Accept-Language", "en-US,en;q=0.9");
+    req.setRawHeader("Referer",         "https://finance.yahoo.com/");
+    if (!m_cookie.isEmpty())
+        req.setRawHeader("Cookie", m_cookie.toUtf8());
+
+    auto* reply = m_nam->get(req);
+    reply->setProperty("symbol", symbol);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        const QString sym = reply->property("symbol").toString();
+
+        if (reply->error() != QNetworkReply::NoError) {
+            // crumb 可能過期，重置並 fallback
+            m_crumbReady = false;
+            m_crumb.clear();
+            fetchYahooQuoteFallback(sym);
+            return;
+        }
+
+        const auto doc = QJsonDocument::fromJson(reply->readAll());
+        const QJsonArray result = doc["quoteResponse"]["result"].toArray();
+        if (result.isEmpty()) {
+            fetchYahooQuoteFallback(sym);
+            return;
+        }
+
+        const QJsonObject obj = result.first().toObject();
+        double price = obj["regularMarketPrice"].toDouble();
+        if (price <= 0) { fetchYahooQuoteFallback(sym); return; }
+
+        Quote q;
+        q.symbol    = sym;
+        q.price     = price;
+        q.change    = obj["regularMarketChange"].toDouble();
+        q.changePct = obj["regularMarketChangePercent"].toDouble();
+        q.volume    = static_cast<qint64>(obj["regularMarketVolume"].toDouble());
+        q.timestamp = QDateTime::currentDateTime();
+        emit quoteReceived(q);
+    });
+}
+
+// Fallback：用 chart endpoint（不需要 crumb，但可能慢半天）
+void QuoteFetcher::fetchYahooQuoteFallback(const QString& symbol)
+{
+    QUrl url(QString("https://query1.finance.yahoo.com/v8/finance/chart/%1").arg(symbol));
+    QUrlQuery q;
+    q.addQueryItem("range",    "2d");
     q.addQueryItem("interval", "1d");
     url.setQuery(q);
 
     QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::UserAgentHeader,
                   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                  "AppleWebKit/537.36 Chrome/120.0 Safari/537.36");
-    req.setRawHeader("Accept",          "application/json");
-    req.setRawHeader("Accept-Language", "en-US,en;q=0.9");
-    req.setRawHeader("Referer",         "https://finance.yahoo.com/");
-    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
-                     QNetworkRequest::NoLessSafeRedirectPolicy);
+                  "AppleWebKit/537.36 Chrome/124.0 Safari/537.36");
+    req.setRawHeader("Accept",   "application/json");
+    req.setRawHeader("Referer",  "https://finance.yahoo.com/");
 
     auto* reply = m_nam->get(req);
-    reply->setProperty("symbol",   symbol);
-    reply->setProperty("quoteMode", true);   // 標記：這是即時報價請求
+    reply->setProperty("symbol", symbol);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         parseYahooQuote(reply, reply->property("symbol").toString());
         reply->deleteLater();
