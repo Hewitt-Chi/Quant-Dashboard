@@ -139,42 +139,42 @@ QuantLib-QT/                          ← 專案根目錄（GitHub repo 根）
     │                                      crumb/cookie 認證 + chart fallback
     │
     └── ui/                            ← UI 層（Qt Widgets）
-        ├── QuantMainDlg.h/.cpp          ← 主視窗：導覽列 + QStackedWidget
-        │
-        ├── WatchlistWidget.h/.cpp     ← MARKET → 即時報價 + Sparkline
-        │
-        ├── PricerWidget.h/.cpp        ← ANALYSIS → 選擇權定價
-        │                                  BSM / Binomial / Heston
-        │                                  Greeks cards + 十字準線
-        │                                  Tab1: Greek vs Spot
-        │                                  Tab2: Vol Smile（BSM bisection IV）
-        │                                  Tab3: BSM vs Heston 對比
-        │
-        ├── YieldCurveWidget.h/.cpp    ← ANALYSIS → 殖利率曲線
-        │                                  QuantLib PiecewiseYieldCurve bootstrap
-        │                                  Spot / Zero / Forward（3M smooth）
-        │                                  情境分析：平移 / 扭轉 / 蝶形
-        │                                  Export CSV
-        │
-        ├── OptionChainWidget.h/.cpp   ← ANALYSIS → 選擇權鏈掃描
-        │                                  Call/Put Price/Delta/IV × 21 Strikes
-        │                                  ATM 標黃 + IV Smile 圖
-        │
-        ├── VolSurfaceWidget.h/.cpp    ← ANALYSIS → IV 曲面 3D（選用）
-        │                                  Qt DataVisualization Q3DSurface
-        │                                  需要 Qt DataVisualization + Vulkan SDK
-        │
-        ├── BacktestWidget.h/.cpp      ← STRATEGY → 回測引擎
-        │                                  5 種策略：
-        │                                    Covered Call / Protective Put
-        │                                    Iron Condor / Collar / Cash-Secured Put
-        │                                  PnL vs B&H + Drawdown 比較圖
-        │                                  Trade log（含 assignment 標紅）
-        │
-        └── SettingsWidget.h/.cpp      ← SYSTEM → 全域設定
-                                           Quote provider（Yahoo / Polygon）
-                                           API key / Refresh 間隔
-                                           Pricing 預設值 / DB 路徑
+    ├── QuantMainDlg.h/.cpp          ← 主視窗：導覽列 + QStackedWidget
+    │
+    ├── WatchlistWidget.h/.cpp     ← MARKET → 即時報價 + Sparkline
+    │
+    ├── PricerWidget.h/.cpp        ← ANALYSIS → 選擇權定價
+    │                                  BSM / Binomial / Heston
+    │                                  Greeks cards + 十字準線
+    │                                  Tab1: Greek vs Spot
+    │                                  Tab2: Vol Smile（BSM bisection IV）
+    │                                  Tab3: BSM vs Heston 對比
+    │
+    ├── YieldCurveWidget.h/.cpp    ← ANALYSIS → 殖利率曲線
+    │                                  QuantLib PiecewiseYieldCurve bootstrap
+    │                                  Spot / Zero / Forward（3M smooth）
+    │                                  情境分析：平移 / 扭轉 / 蝶形
+    │                                  Export CSV
+    │
+    ├── OptionChainWidget.h/.cpp   ← ANALYSIS → 選擇權鏈掃描
+    │                                  Call/Put Price/Delta/IV × 21 Strikes
+    │                                  ATM 標黃 + IV Smile 圖
+    │
+    ├── VolSurfaceWidget.h/.cpp    ← ANALYSIS → IV 曲面 3D（選用）
+    │                                  Qt DataVisualization Q3DSurface
+    │                                  需要 Qt DataVisualization + Vulkan SDK
+    │
+    ├── BacktestWidget.h/.cpp      ← STRATEGY → 回測引擎
+    │                                  5 種策略：
+    │                                    Covered Call / Protective Put
+    │                                    Iron Condor / Collar / Cash-Secured Put
+    │                                  PnL vs B&H + Drawdown 比較圖
+    │                                  Trade log（含 assignment 標紅）
+    │
+    └── SettingsWidget.h/.cpp      ← SYSTEM → 全域設定
+                                       Quote provider（Yahoo / Polygon）
+                                       API key / Refresh 間隔
+                                       Pricing 預設值 / DB 路徑
 ```
 
 > **注意：** 原始碼直接放在專案根目錄（Qt Wizard 產生的預設結構），不一定需要 `src/` 子目錄。`CMakeLists.txt` 中的路徑需與實際檔案位置一致。
