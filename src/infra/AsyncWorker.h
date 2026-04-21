@@ -139,7 +139,9 @@ struct BacktestRequest
     enum class Strategy {
         CoveredCall,      // 賣出 OTM Call + 持股
         ProtectivePut,    // 買入 OTM Put + 持股
-        IronCondor        // 賣 OTM Call + 買更 OTM Call + 賣 OTM Put + 買更 OTM Put
+        IronCondor,       // 賣 OTM Call + 買更 OTM Call + 賣 OTM Put + 買更 OTM Put
+        Collar,           // 買 OTM Put + 賣 OTM Call（同時保護下檔 + 犧牲上漲）
+        CashSecuredPut    // 賣 OTM Put + 持有現金（等待低價買入）
     };
 
     QString symbol;

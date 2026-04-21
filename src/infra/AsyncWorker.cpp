@@ -257,14 +257,10 @@ BacktestResult AsyncWorker::computeBacktest(BacktestRequest req,
                     result.premiumPerTrade.append(-cost);  // 負值 = 付出
 
                 } else if (req.strategy == BacktestRequest::Strategy::IronCondor) {
-                    // Iron Condor：
-                    //   賣 shortCallStrike OTM call + 買 longCallStrike 更 OTM call
-                    //   賣 shortPutStrike  OTM put  + 買 longPutStrike  更 OTM put
                     double shortCall = spot * (1.0 + req.strikeOffsetPct);
                     double longCall  = spot * (1.0 + req.strikeOffsetPct + req.wingWidthPct);
                     double shortPut  = spot * (1.0 - req.strikeOffsetPct);
                     double longPut   = spot * (1.0 - req.strikeOffsetPct - req.wingWidthPct);
-
                     double premium =
                         bsmPrice(spot, shortCall, Option::Call, T) -
                         bsmPrice(spot, longCall,  Option::Call, T) +
@@ -272,12 +268,52 @@ BacktestResult AsyncWorker::computeBacktest(BacktestRequest req,
                         bsmPrice(spot, longPut,   Option::Put,  T);
                     cashBalance += premium;
                     result.premiumPerTrade.append(premium);
-
-                    // 到期時損益（簡化：只考慮 short legs 被 assigned）
                     if (spot > shortCall)
                         cashBalance -= qMin(spot - shortCall, spot * req.wingWidthPct);
                     if (spot < shortPut)
                         cashBalance -= qMin(shortPut - spot, spot * req.wingWidthPct);
+
+                } else if (req.strategy == BacktestRequest::Strategy::Collar) {
+                    // Collar：買 OTM Put（保護）+ 賣 OTM Call（抵消成本）
+                    // 淨成本 = put premium - call premium（通常接近零，稱為 zero-cost collar）
+                    double callStrike = spot * (1.0 + req.strikeOffsetPct);
+                    double putStrike  = spot * (1.0 - req.strikeOffsetPct);
+                    double callPrem   = bsmPrice(spot, callStrike, Option::Call, T) * shares;
+                    double putCost    = bsmPrice(spot, putStrike,  Option::Put,  T) * shares;
+                    double netPrem    = callPrem - putCost;  // 正 = 淨收入，負 = 淨支出
+                    cashBalance += netPrem;
+                    openStrike    = callStrike;
+                    hasOpenCall   = true;
+                    result.premiumPerTrade.append(netPrem);
+
+                    // 到期：call 被 assigned 的處理（同 Covered Call）
+                    // Put 保護：若 spot < putStrike 時回補損失
+                    if (spot < putStrike) {
+                        double recovery = (putStrike - spot) * shares;
+                        cashBalance += recovery;
+                        result.assignmentEvents.append(i);
+                    }
+
+                } else if (req.strategy == BacktestRequest::Strategy::CashSecuredPut) {
+                    // Cash-Secured Put：
+                    // 賣 OTM Put + 持有等值現金（不持股）
+                    // 目標：以更低的價格買入股票，同時收取 premium
+                    double putStrike  = spot * (1.0 - req.strikeOffsetPct);
+                    double putPrem    = bsmPrice(spot, putStrike, Option::Put, T);
+                    cashBalance      += putPrem;
+                    result.premiumPerTrade.append(putPrem);
+
+                    // 到期：put 被 assigned → 以 strike 買入股票
+                    if (spot < putStrike) {
+                        // 用現金買股
+                        if (cashBalance >= putStrike) {
+                            cashBalance -= putStrike;
+                            shares      += 1.0;     // 買入一股
+                            result.assignmentEvents.append(i);
+                        }
+                        nextExpiry += req.dteDays;
+                        continue;   // 已被 assigned，這期不再賣新 put
+                    }
                 }
 
                 nextExpiry += req.dteDays;
