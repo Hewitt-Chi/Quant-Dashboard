@@ -96,6 +96,8 @@ YieldCurveWidget::YieldCurveWidget(AsyncWorker* worker, QWidget* parent)
 
     connect(m_worker, &AsyncWorker::yieldCurveFinished,
             this, &YieldCurveWidget::onYieldCurveFinished);
+    connect(m_worker, &AsyncWorker::nelsonSiegelFinished,
+            this, &YieldCurveWidget::onNelsonSiegelFinished);
 
     // 初始化 scenario series
     m_scenSpot1 = m_scenSpot2 = m_scenSpot3 = nullptr;
@@ -130,6 +132,24 @@ QWidget* YieldCurveWidget::buildInputPanel()
         "QPushButton:disabled{color:palette(mid);}");
     topRow->addWidget(m_exportBtn);
     connect(m_exportBtn, &QPushButton::clicked, this, &YieldCurveWidget::onExportCsv);
+    // ── Fit Nelson-Siegel 按鈕 ────────────────────────────────────────────────
+        m_nsBtn = new QPushButton("Fit Nelson-Siegel", box);
+    m_nsBtn->setMinimumHeight(32);
+    m_nsBtn->setMinimumWidth(140);
+    m_nsBtn->setEnabled(false);   // Bootstrap 完成後才啟用
+    m_nsBtn->setStyleSheet(
+        "QPushButton{border:1px solid #7c3aed;color:#c4b5fd;"
+        "border-radius:6px;padding:0 10px;}"
+        "QPushButton:hover{background:#1e1b4b;}"
+        "QPushButton:disabled{color:palette(mid);border-color:palette(mid);}");
+    topRow->addWidget(m_nsBtn);
+    connect(m_nsBtn, &QPushButton::clicked,
+        this, &YieldCurveWidget::onFitNelsonSiegel);
+
+    m_nsParamLbl = new QLabel("", box);
+    m_nsParamLbl->setStyleSheet("font-size:10px;color:rgba(196,181,253,0.7);");
+    topRow->addWidget(m_nsParamLbl);
+    // ─────────────────────────────────────────────────────────────────────────
 
     m_calcBtn = new QPushButton("Bootstrap curve", box);
     m_calcBtn->setMinimumHeight(32); m_calcBtn->setMinimumWidth(140);
@@ -193,6 +213,9 @@ QWidget* YieldCurveWidget::buildSpotForwardTab()
     m_zeroSeries  = new QLineSeries; m_zeroSeries->setName("Zero rate");
     m_fwdSeries    = new QLineSeries; m_fwdSeries->setName("1M forward (raw)");
     m_fwdSmoothed  = new QLineSeries; m_fwdSmoothed->setName("Forward (3M avg)");
+    m_nsSeries     = new QLineSeries; m_nsSeries->setName("Nelson-Siegel fit");
+    QPen pns(QColor("#f0abfc")); pns.setWidth(2); pns.setStyle(Qt::DotLine);
+    m_nsSeries->setPen(pns);
     QPen ps(QColor("#3b82f6")); ps.setWidth(2); m_spotSeries->setPen(ps);
     QPen pz(QColor("#10b981")); pz.setWidth(2); m_zeroSeries->setPen(pz);
     QPen pf(QColor("#f97316")); pf.setWidth(1); pf.setStyle(Qt::DashLine); pf.setColor(QColor(249,115,22,80));
@@ -203,12 +226,13 @@ QWidget* YieldCurveWidget::buildSpotForwardTab()
     m_spotChart->addSeries(m_zeroSeries);
     m_spotChart->addSeries(m_fwdSeries);
     m_spotChart->addSeries(m_fwdSmoothed);
+    m_spotChart->addSeries(m_nsSeries);
 
     auto* axX = makeAxis("Maturity (years)", "%.1f", 7);
     auto* axY = makeAxis("Rate (%)",         "%.2f", 7);
     m_spotChart->addAxis(axX, Qt::AlignBottom);
     m_spotChart->addAxis(axY, Qt::AlignLeft);
-    for (auto* s : {m_spotSeries, m_zeroSeries, m_fwdSeries, m_fwdSmoothed}) {
+    for (auto* s : {m_spotSeries, m_zeroSeries, m_fwdSeries, m_fwdSmoothed, m_nsSeries}) {
         s->attachAxis(axX); s->attachAxis(axY);
     }
 
@@ -299,6 +323,7 @@ void YieldCurveWidget::onYieldCurveFinished(const YieldCurveResult& result)
     updateCharts(result);
     updateTable(result);
     if (m_applyShiftBtn) m_applyShiftBtn->setEnabled(true);
+    if (m_nsBtn)        m_nsBtn->setEnabled(true);
 
     // Status bar: 顯示關鍵點
     double maxT = result.maturitiesYears.last();
@@ -612,4 +637,53 @@ void YieldCurveWidget::addScenarioSeries(const YieldCurveResult& r,
     for (int i = 0; i < r.maturitiesYears.size(); ++i)
         pts.append({r.maturitiesYears[i], r.spotRates[i]});
     (*target)->replace(pts);
+}
+
+// =============================================================================
+// Nelson-Siegel 擬合
+// =============================================================================
+void YieldCurveWidget::onFitNelsonSiegel()
+{
+    QVector<TenorRate> tenors;
+    for (const auto& t : m_tenors)
+        tenors.append({t.months, t.spin->value()});
+
+    m_nsBtn->setEnabled(false);
+    m_nsBtn->setText("Fitting...");
+    m_worker->submitNelsonSiegel(tenors);
+    emit statusMessage("Fitting Nelson-Siegel model...");
+}
+
+void YieldCurveWidget::onNelsonSiegelFinished(const NelsonSiegelResult& result)
+{
+    m_nsBtn->setEnabled(true);
+    m_nsBtn->setText("Fit Nelson-Siegel");
+
+    if (!result.success) {
+        emit statusMessage("NS fit error: " + result.errorMsg);
+        return;
+    }
+
+    // 更新疊加曲線
+    QVector<QPointF> pts;
+    for (int i = 0; i < result.maturitiesYears.size(); ++i)
+        pts.append({result.maturitiesYears[i], result.nsRates[i]});
+    m_nsSeries->replace(pts);
+
+    // 顯示擬合參數
+    m_nsParamLbl->setText(
+        QString("NS: β₀=%1  β₁=%2  β₂=%3  τ=%4  RMSE=%5bps")
+        .arg(result.beta0*100, 0,'f',2)
+        .arg(result.beta1*100, 0,'f',2)
+        .arg(result.beta2*100, 0,'f',2)
+        .arg(result.tau,       0,'f',2)
+        .arg(result.fitError*100, 0,'f',1));
+
+    emit statusMessage(
+        QString("Nelson-Siegel fit: β₀=%1%% β₁=%2%% β₂=%3%% τ=%4 RMSE=%5bps")
+        .arg(result.beta0*100, 0,'f',2)
+        .arg(result.beta1*100, 0,'f',2)
+        .arg(result.beta2*100, 0,'f',2)
+        .arg(result.tau,       0,'f',2)
+        .arg(result.fitError*100, 0,'f',1));
 }

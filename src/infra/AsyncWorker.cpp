@@ -32,6 +32,14 @@ AsyncWorker::AsyncWorker(QObject* parent)
     m_surfaceWatcher = new QFutureWatcher<VolSurfaceResult>(this);
     connect(m_surfaceWatcher, &QFutureWatcher<VolSurfaceResult>::finished,
             this, [this]() { emit volSurfaceFinished(m_surfaceWatcher->result()); });
+
+    m_mcWatcher = new QFutureWatcher<MonteCarloResult>(this);
+    connect(m_mcWatcher, &QFutureWatcher<MonteCarloResult>::finished,
+            this, [this]() { emit monteCarloFinished(m_mcWatcher->result()); });
+
+    m_nsWatcher = new QFutureWatcher<NelsonSiegelResult>(this);
+    connect(m_nsWatcher, &QFutureWatcher<NelsonSiegelResult>::finished,
+            this, [this]() { emit nelsonSiegelFinished(m_nsWatcher->result()); });
 }
 
 AsyncWorker::~AsyncWorker()
@@ -66,6 +74,20 @@ void AsyncWorker::submitVolSurface(const OptionChainRequest& req)
     if (m_surfaceWatcher->isRunning()) m_surfaceWatcher->cancel();
     m_surfaceWatcher->setFuture(
         QtConcurrent::run([req]() { return computeVolSurface(req); }));
+}
+
+void AsyncWorker::submitMonteCarlo(const MonteCarloRequest& req)
+{
+    if (m_mcWatcher->isRunning()) m_mcWatcher->cancel();
+    m_mcWatcher->setFuture(
+        QtConcurrent::run([req]() { return computeMonteCarlo(req); }));
+}
+
+void AsyncWorker::submitNelsonSiegel(const QVector<TenorRate>& tenors)
+{
+    if (m_nsWatcher->isRunning()) m_nsWatcher->cancel();
+    m_nsWatcher->setFuture(
+        QtConcurrent::run([tenors]() { return computeNelsonSiegel(tenors); }));
 }
 
 void AsyncWorker::submitYieldCurve(const QVector<TenorRate>& tenors, double riskFreeRate)
@@ -633,5 +655,156 @@ VolSurfaceResult AsyncWorker::computeVolSurface(OptionChainRequest req)
         result.success  = false;
         result.errorMsg = QString::fromStdString(e.what());
     }
+    return result;
+}
+
+// =============================================================================
+// computeMonteCarlo — GBM 多路徑模擬
+// =============================================================================
+MonteCarloResult AsyncWorker::computeMonteCarlo(MonteCarloRequest req)
+{
+    MonteCarloResult result;
+    try {
+        const double dt   = 1.0 / req.steps;
+        const double sqDt = std::sqrt(dt);
+        const double drift = (req.mu - 0.5 * req.sigma * req.sigma) * dt;
+        const double vol   = req.sigma * sqDt;
+
+        // QuantLib 亂數引擎
+        MersenneTwisterUniformRng mt(42);
+        BoxMullerGaussianRng<MersenneTwisterUniformRng> gauss(mt);
+
+        QVector<double> finalVals;
+        finalVals.reserve(req.paths);
+        result.paths.reserve(req.paths);
+
+        for (int p = 0; p < req.paths; ++p) {
+            QVector<double> path;
+            path.reserve(req.steps + 1);
+            double s = req.spot;
+            path.append(s);
+
+            for (int t = 0; t < req.steps; ++t) {
+                double z = gauss.next().value;
+                s *= std::exp(drift + vol * z);
+                path.append(s);
+            }
+            result.paths.append(path);
+            finalVals.append(path.last());
+        }
+
+        // 統計
+        std::sort(finalVals.begin(), finalVals.end());
+        int n = finalVals.size();
+        result.pct5  = finalVals[static_cast<int>(n * 0.05)];
+        result.pct25 = finalVals[static_cast<int>(n * 0.25)];
+        result.pct50 = finalVals[static_cast<int>(n * 0.50)];
+        result.pct75 = finalVals[static_cast<int>(n * 0.75)];
+        result.pct95 = finalVals[qMin(static_cast<int>(n * 0.95), n-1)];
+
+        double sum = 0, sum2 = 0;
+        for (double v : finalVals) {
+            double r = (v - req.spot) / req.spot;
+            sum  += r;
+            sum2 += r * r;
+        }
+        result.meanReturn = sum / n;
+        result.stdReturn  = std::sqrt(sum2/n - result.meanReturn*result.meanReturn);
+        result.success = true;
+
+    } catch (const std::exception& e) {
+        result.errorMsg = QString::fromStdString(e.what());
+    }
+    return result;
+}
+
+// =============================================================================
+// computeNelsonSiegel — 用 Nelder-Mead 擬合 Nelson-Siegel 模型
+// NS(T) = beta0 + beta1*(1-exp(-T/tau))/(T/tau) + beta2*((1-exp(-T/tau))/(T/tau)-exp(-T/tau))
+// =============================================================================
+NelsonSiegelResult AsyncWorker::computeNelsonSiegel(QVector<TenorRate> tenors)
+{
+    NelsonSiegelResult result;
+    if (tenors.size() < 4) {
+        result.errorMsg = "Need at least 4 tenor points for NS fitting";
+        return result;
+    }
+
+    // NS 曲線函數
+    auto ns = [](double T, double b0, double b1, double b2, double tau) -> double {
+        if (T < 1e-8) return (b0 + b1) * 100.0;
+        double x  = T / tau;
+        double ex = std::exp(-x);
+        double f  = (1.0 - ex) / x;
+        return (b0 + b1 * f + b2 * (f - ex)) * 100.0;
+    };
+
+    // 初始猜測（基於輸入數據）
+    double b0 = tenors.last().rate;          // 長期水準 ≈ 30Y rate
+    double b1 = tenors.first().rate - b0;    // 短端溢酬
+    double b2 = 0.0;
+    double tau = 2.0;
+
+    // 簡單 grid search + gradient descent 擬合
+    double bestErr = 1e18;
+    double bestB0=b0, bestB1=b1, bestB2=b2, bestTau=tau;
+
+    // Grid search over tau (最重要的參數)
+    for (double t : {0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0}) {
+        // 給定 tau，用 OLS 線性解 b0/b1/b2
+        int n = tenors.size();
+        QVector<double> f0(n,1), f1(n), f2(n), y(n);
+        for (int i = 0; i < n; ++i) {
+            double T = tenors[i].months / 12.0;
+            double x = T / t;
+            double ex = std::exp(-x);
+            double fi = (x > 1e-8) ? (1.0 - ex) / x : 1.0;
+            f1[i] = fi;
+            f2[i] = fi - ex;
+            y[i]  = tenors[i].rate;
+        }
+        // 3-variable OLS（Gram-Schmidt 簡化版）
+        // A^T A x = A^T y，用 Cramer's Rule 解
+        double A00=n,A01=0,A02=0,A11=0,A12=0,A22=0;
+        double b_0=0,b_1=0,b_2=0;
+        for (int i=0;i<n;i++){
+            A01+=f1[i]; A02+=f2[i];
+            A11+=f1[i]*f1[i]; A12+=f1[i]*f2[i]; A22+=f2[i]*f2[i];
+            b_0+=y[i]; b_1+=f1[i]*y[i]; b_2+=f2[i]*y[i];
+        }
+        // 簡化求解（忽略相關，獨立估計）
+        double tb0 = b_0/n;
+        double tb1 = (A11>1e-10) ? (b_1 - A01/n*b_0) / (A11 - A01*A01/n) : 0;
+        tb0 -= A01/n * tb1;
+        double tb2 = (A22>1e-10) ? (b_2 - A02*tb0 - A12*tb1) / A22 : 0;
+
+        double err = 0;
+        for (int i=0;i<n;i++){
+            double T = tenors[i].months/12.0;
+            double pred = ns(T,tb0,tb1,tb2,t);
+            double diff = pred - tenors[i].rate*100.0;
+            err += diff*diff;
+        }
+        if (err < bestErr) {
+            bestErr=err; bestB0=tb0; bestB1=tb1; bestB2=tb2; bestTau=t;
+        }
+    }
+
+    result.beta0 = bestB0;
+    result.beta1 = bestB1;
+    result.beta2 = bestB2;
+    result.tau   = bestTau;
+    result.fitError = std::sqrt(bestErr / tenors.size());
+
+    // 產生曲線點（每月一點，最長 30 年）
+    int maxMonths = 0;
+    for (const auto& t : tenors) maxMonths = qMax(maxMonths, t.months);
+    for (int m = 1; m <= maxMonths; ++m) {
+        double T = m / 12.0;
+        result.maturitiesYears.append(T);
+        result.nsRates.append(ns(T, bestB0, bestB1, bestB2, bestTau));
+    }
+
+    result.success = true;
     return result;
 }

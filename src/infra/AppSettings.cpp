@@ -128,3 +128,34 @@ void AppSettings::reset()
     s.clear();
     s.sync();
 }
+
+// ── Watchlist 持久化 ──────────────────────────────────────────────────────────
+QStringList AppSettings::watchlist() const
+{
+    auto s = cfg();
+    QStringList defaults = {"SOXX", "SMH", "QQQI"};
+    return s.value("watchlist/symbols", defaults).toStringList();
+}
+
+void AppSettings::setWatchlist(const QStringList& syms)
+{
+    auto s = cfg();
+    s.setValue("watchlist/symbols", syms);
+    s.sync();
+}
+
+void AppSettings::addWatchlistSymbol(const QString& sym)
+{
+    auto list = watchlist();
+    if (!list.contains(sym)) {
+        list.append(sym);
+        setWatchlist(list);
+    }
+}
+
+void AppSettings::removeWatchlistSymbol(const QString& sym)
+{
+    auto list = watchlist();
+    list.removeAll(sym);
+    setWatchlist(list);
+}

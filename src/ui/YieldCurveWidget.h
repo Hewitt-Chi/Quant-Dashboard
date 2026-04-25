@@ -28,6 +28,8 @@ signals:
 
 private slots:
     void onCalculate();
+    void onNelsonSiegelFinished(const NelsonSiegelResult& result);
+    void onFitNelsonSiegel();
     void onYieldCurveFinished(const YieldCurveResult& result);
     void onPresetChanged(int index);
     void onExportCsv();
@@ -89,4 +91,9 @@ private:
     QLineSeries*     m_scenSpot2  = nullptr;
     QLineSeries*     m_scenSpot3  = nullptr;
     int              m_scenCount  = 0;
+
+    // Nelson-Siegel 擬合曲線
+    QLineSeries*     m_nsSeries   = nullptr;
+    QPushButton*     m_nsBtn      = nullptr;
+    QLabel*          m_nsParamLbl = nullptr;
 };

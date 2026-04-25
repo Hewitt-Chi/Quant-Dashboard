@@ -131,6 +131,60 @@ struct YieldCurveResult
     QVector<double> zeroRates;            // 零息利率（%）
 };
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MonteCarloResult — 多路徑 Monte Carlo 模擬
+// ─────────────────────────────────────────────────────────────────────────────
+struct MonteCarloRequest
+{
+    double spot        = 100.0;
+    double mu          = 0.08;    // 年化漂移率
+    double sigma       = 0.20;    // 年化波動率
+    int    paths       = 200;     // 路徑數量
+    int    steps       = 252;     // 每條路徑的步數（交易日）
+    double riskFree    = 0.05;
+    double strikeOffsetPct = 0.05;
+    int    dteDays     = 30;
+};
+
+struct MonteCarloResult
+{
+    bool    success = false;
+    QString errorMsg;
+
+    // paths 條 GBM 路徑（每條 steps+1 個點）
+    QVector<QVector<double>> paths;
+
+    // 統計
+    double meanReturn  = 0.0;
+    double stdReturn   = 0.0;
+    double pct5        = 0.0;   // 5th percentile（最壞情境）
+    double pct25       = 0.0;
+    double pct50       = 0.0;   // 中位數
+    double pct75       = 0.0;
+    double pct95       = 0.0;   // 95th percentile（最佳情境）
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NelsonSiegelResult — Nelson-Siegel 殖利率曲線模型擬合
+// ─────────────────────────────────────────────────────────────────────────────
+struct NelsonSiegelResult
+{
+    bool    success = false;
+    QString errorMsg;
+
+    // 擬合參數
+    double beta0 = 0.0;   // 長期水準
+    double beta1 = 0.0;   // 短期成分
+    double beta2 = 0.0;   // 中期駝峰
+    double tau   = 1.0;   // 衰退速率
+
+    // 曲線點（與 YieldCurveResult 格式相同，方便疊加）
+    QVector<double> maturitiesYears;
+    QVector<double> nsRates;          // Nelson-Siegel 擬合利率（%）
+    double          fitError = 0.0;   // RMSE vs 輸入 tenor rates
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // BacktestRequest / BacktestResult
 // ─────────────────────────────────────────────────────────────────────────────
@@ -206,6 +260,12 @@ public:
     // 提交 Implied Vol 曲面計算（非阻塞）
     void submitVolSurface(const OptionChainRequest& req);
 
+    // 提交 Monte Carlo 模擬（非阻塞）
+    void submitMonteCarlo(const MonteCarloRequest& req);
+
+    // 提交 Nelson-Siegel 擬合（非阻塞）
+    void submitNelsonSiegel(const QVector<TenorRate>& tenors);
+
     // 取消所有進行中的工作
     void cancelAll();
 
@@ -225,6 +285,8 @@ signals:
     void yieldCurveFinished(const YieldCurveResult& result);
     void optionChainFinished(const OptionChainResult& result);
     void volSurfaceFinished(const VolSurfaceResult& result);
+    void monteCarloFinished(const MonteCarloResult& result);
+    void nelsonSiegelFinished(const NelsonSiegelResult& result);
     void progressUpdated(int percent);   // 回測進度 0–100
 
 private:
@@ -233,11 +295,15 @@ private:
     static BacktestResult    computeBacktest(BacktestRequest req, AsyncWorker* self);
     static YieldCurveResult   computeYieldCurve(QVector<TenorRate> tenors, double rf);
     static OptionChainResult  computeOptionChain(OptionChainRequest req);
-    static VolSurfaceResult   computeVolSurface(OptionChainRequest req);
+    static VolSurfaceResult      computeVolSurface(OptionChainRequest req);
+    static MonteCarloResult      computeMonteCarlo(MonteCarloRequest req);
+    static NelsonSiegelResult    computeNelsonSiegel(QVector<TenorRate> tenors);
 
     QFutureWatcher<PricingResult>*    m_pricingWatcher   = nullptr;
     QFutureWatcher<BacktestResult>*   m_backtestWatcher  = nullptr;
     QFutureWatcher<YieldCurveResult>*   m_yieldWatcher   = nullptr;
     QFutureWatcher<OptionChainResult>*  m_chainWatcher   = nullptr;
-    QFutureWatcher<VolSurfaceResult>*   m_surfaceWatcher = nullptr;
+    QFutureWatcher<VolSurfaceResult>*    m_surfaceWatcher  = nullptr;
+    QFutureWatcher<MonteCarloResult>*    m_mcWatcher       = nullptr;
+    QFutureWatcher<NelsonSiegelResult>*  m_nsWatcher       = nullptr;
 };

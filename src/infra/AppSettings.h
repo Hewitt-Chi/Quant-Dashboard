@@ -1,7 +1,7 @@
 #pragma once
 #include <QString>
+#include <QStringList>
 #include <QColor>
-
 // ─────────────────────────────────────────────────────────────────────────────
 // AppSettings
 //
@@ -42,6 +42,12 @@ public:
     // ── UI ────────────────────────────────────────────────────────────────────
     bool    darkMode() const;
     void    setDarkMode(bool on);
+
+    // ── Watchlist 自選股（持久化）────────────────────────────────────────────
+    QStringList watchlist() const;            // 讀取儲存的 symbol 清單
+    void        setWatchlist(const QStringList& syms);
+    void        addWatchlistSymbol(const QString& sym);
+    void        removeWatchlistSymbol(const QString& sym);
 
     // ── 重設所有設定為預設值 ───────────────────────────────────────────────────
     void    reset();

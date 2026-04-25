@@ -12,6 +12,7 @@ class SettingsWidget;
 class YieldCurveWidget;
 class OptionChainWidget;
 class VolSurfaceWidget;
+class MonteCarloWidget;
 
 //QT_BEGIN_NAMESPACE
 //namespace Ui { class QuantMainDlg; }
@@ -45,5 +46,6 @@ private:
     YieldCurveWidget* m_yieldCurve  = nullptr;
     OptionChainWidget* m_optionChain  = nullptr;
     VolSurfaceWidget* m_volSurface = nullptr;
+    MonteCarloWidget*   m_monteCarlo   = nullptr;
 };
 

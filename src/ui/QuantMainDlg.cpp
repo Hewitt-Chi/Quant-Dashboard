@@ -12,6 +12,7 @@
 #include "../infra/AsyncWorker.h"
 #include "../infra/DatabaseManager.h"
 #include "../infra/QuoteFetcher.h"
+#include "MonteCarloWidget.h"
 
 
 #include <QDockWidget>
@@ -24,6 +25,7 @@
 #include <QApplication>
 #include <qoverload.h>
 #include <QMap>
+#include <QTimer>
 
 
 QuantMainDlg::QuantMainDlg(QWidget *parent)
@@ -112,12 +114,12 @@ void QuantMainDlg::onSettingsChanged()
 void QuantMainDlg::setupUi()
 {
     auto* nav = new QListWidget(this);
-    nav->setFixedWidth(164);
+    nav->setFixedWidth(220);
     nav->setSpacing(2);
     nav->setFrameShape(QFrame::NoFrame);
     nav->setStyleSheet(
         "QListWidget{background:palette(window);border-right:1px solid palette(mid);}"
-        "QListWidget::item{padding:9px 14px;border-radius:6px;margin:2px 6px;font-size:13px;}"
+        "QListWidget::item{padding:9px 10px;border-radius:6px;margin:2px 4px;font-size:13px;}"
         "QListWidget::item:selected{background:palette(highlight);color:palette(highlighted-text);}");
 
     QFont gf; gf.setPointSize(9);
@@ -134,17 +136,29 @@ void QuantMainDlg::setupUi()
         it->setData(Qt::UserRole, pageIndex);
         };
 
-    addGroup("  MARKET");
-    addPage("  Watchlist", 0);
+    /*addGroup(" MARKET");
+    addPage(" Watchlist", 0);
+    addGroup(" ANALYSIS");
+    addPage(" Option pricer", 1);
+    addPage(" Backtest", 2);
+    addPage(" Yield curve", 3);
+    addPage(" Option chain",  4);
+    addPage(" Monte Carlo",   5);
+    addGroup(" STRATEGY");
+    addGroup(" SYSTEM");
+    addPage(" Settings", 6);*/
+    
     addGroup("  ANALYSIS");
+    addPage(" Watchlist", 0);
     addPage("  Option pricer", 1);
-    addPage("  Backtest", 2);
     addPage("  Yield curve", 3);
-    addPage("  Option chain",  4);
-    addPage("  Vol surface", 5);
+    addPage("  Option chain", 4);
+    addPage("  Monte Carlo", 5);  // ← 確認有這行
     addGroup("  STRATEGY");
+    addPage("  Backtest", 2);
     addGroup("  SYSTEM");
-    addPage("  Settings", 6);
+    addPage("  Vol surface", 6);  // ← index 改成 6
+    addPage("  Settings", 7);  // ← index 改成 7
 
     auto* stack = new QStackedWidget(this);
     m_watchlist = new WatchlistWidget(m_fetcher, m_db, this);
@@ -153,16 +167,18 @@ void QuantMainDlg::setupUi()
     m_yieldCurve = new YieldCurveWidget(m_worker, this);
     m_settings = new SettingsWidget(this);
     m_yieldCurve = new YieldCurveWidget(m_worker, this);
+    m_monteCarlo = new MonteCarloWidget(m_worker, this);
     m_volSurface = new VolSurfaceWidget(m_worker, this);
     // 在 setupUi() 裡
     m_optionChain = new OptionChainWidget(m_worker, this);
-    stack->addWidget(m_watchlist);    // 0
-    stack->addWidget(m_pricer);       // 1
-    stack->addWidget(m_backtest);     // 2
-    stack->addWidget(m_yieldCurve);   // 3
-    stack->addWidget(m_optionChain);  // 4  
-    stack->addWidget(m_volSurface);   // index 5（Settings 變 6）
-    stack->addWidget(m_settings);     // 5
+    stack->addWidget(m_watchlist);     // 0
+    stack->addWidget(m_pricer);        // 1
+    stack->addWidget(m_backtest);      // 2
+    stack->addWidget(m_yieldCurve);    // 3
+    stack->addWidget(m_optionChain);   // 4
+    stack->addWidget(m_monteCarlo);    // 5  ← 確認有這行
+    stack->addWidget(m_volSurface);    // 6  ← Vol surface 往後移
+    stack->addWidget(m_settings);      // 7  ← Settings 往後移
 
     connect(nav, &QListWidget::currentItemChanged,
         [stack](QListWidgetItem* item, QListWidgetItem*) {
@@ -186,6 +202,8 @@ void QuantMainDlg::setupUi()
             this, [this](const QString& m){ statusBar()->showMessage(m); });
     connect(m_volSurface, &VolSurfaceWidget::statusMessage,
         this, [this](const QString& m) { statusBar()->showMessage(m); });
+    connect(m_monteCarlo, &MonteCarloWidget::statusMessage,
+            this, [this](const QString& m){ statusBar()->showMessage(m); });
     connect(m_settings,  &SettingsWidget::settingsChanged,
             this, &QuantMainDlg::onSettingsChanged);
 
@@ -198,7 +216,12 @@ void QuantMainDlg::setupUi()
         splitter->setStretchFactor(0, 0);
         splitter->setStretchFactor(1, 1);
         splitter->handle(1)->setEnabled(false);
+        splitter->setSizes({ 220, 1060 });
         setCentralWidget(splitter);
+
+        QTimer::singleShot(0, this, [splitter]() {
+            splitter->setSizes({ 220, splitter->width() - 220 });
+            });                                                        // ← 這行要有
 
         auto* dbLbl = new QLabel("DB: " + AppSettings::instance().dbPath(), this);
         dbLbl->setStyleSheet("font-size:10px;color:gray;margin-right:6px;");

@@ -226,9 +226,9 @@ void WatchlistWidget::buildUi()
     cardsLay->setContentsMargins(0,0,0,0);
     cardsLay->setSpacing(8);
 
-    // 預建 SOXX / SMH / QQQI 三張卡
-    const QStringList defaultSyms = {"SOXX", "SMH", "QQQI"};
-    for (const auto& sym : defaultSyms) {
+    // 從 AppSettings 讀取持久化的 symbol 清單
+    const QStringList savedSyms = AppSettings::instance().watchlist();
+    for (const auto& sym : savedSyms) {
         auto* card = new QuoteCard(sym, m_cardsContainer);
         m_cards[sym] = card;
         cardsLay->addWidget(card);
@@ -311,9 +311,12 @@ void WatchlistWidget::onAddSymbol()
         ->insertWidget(m_cards.size()-1, card);
     m_symInput->clear();
 
+    // 持久化到 AppSettings
+    AppSettings::instance().addWatchlistSymbol(sym);
+
     m_fetcher->fetchHistory(sym, "1y");
     m_fetcher->fetchQuotes({sym});
-    emit statusMessage("Added " + sym + ", fetching data...");
+    emit statusMessage("Added " + sym + " (saved to watchlist), fetching data...");
 }
 
 void WatchlistWidget::onCountdownTick()

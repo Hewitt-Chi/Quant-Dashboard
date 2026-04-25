@@ -84,6 +84,8 @@ set(UI_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/YieldCurveWidget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/OptionChainWidget.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/OptionChainWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/MonteCarloWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui/MonteCarloWidget.cpp
 )
 
 if(Qt6DataVisualization_FOUND)
