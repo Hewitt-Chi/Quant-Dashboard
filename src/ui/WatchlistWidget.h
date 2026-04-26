@@ -25,8 +25,19 @@ public:
     explicit QuoteCard(const QString& symbol, QWidget* parent = nullptr);
 
     void updateQuote(const Quote& q);
-    void updateSparkline(const QVector<OhlcBar>& bars);  // 最近 30 根 K 線
+    void updateSparkline(const QVector<OhlcBar>& bars);
     QString symbol() const { return m_symbol; }
+
+    // 價格警示：price >= upper 或 price <= lower 時發出 alert signal
+    void    setAlertLevels(double upper, double lower);
+    void    clearAlerts();
+    double  alertUpper() const { return m_alertUpper; }
+    double  alertLower() const { return m_alertLower; }
+    bool    hasAlerts()  const { return m_alertUpper > 0 || m_alertLower > 0; }
+
+signals:
+    void priceAlert(const QString& symbol, double price,
+                    const QString& direction);  // "above" or "below"
 
 private:
     QString     m_symbol;
@@ -35,6 +46,10 @@ private:
     QLabel*     m_changeLabel = nullptr;
     QLabel*     m_volumeLabel = nullptr;
     QLabel*     m_timeLabel   = nullptr;
+
+    double       m_alertUpper = 0.0;
+    double       m_alertLower = 0.0;
+    bool         m_alertFired = false;  // 避免重複觸發
 
     // Mini sparkline
     QChart*      m_chart  = nullptr;
@@ -63,6 +78,8 @@ private slots:
     void onRefreshClicked();
     void onAddSymbol();
     void onCountdownTick();
+    void onSetAlert(const QString& symbol);
+    void onAlertTriggered(const QString& symbol, double price, const QString& dir);
 
 private:
     void buildUi();
@@ -87,4 +104,7 @@ private:
 
     // 新增 Symbol 輸入
     class QLineEdit* m_symInput = nullptr;
+
+    // 警示狀態：symbol -> (upper, lower)
+    QMap<QString, QPair<double,double>> m_alerts;
 };

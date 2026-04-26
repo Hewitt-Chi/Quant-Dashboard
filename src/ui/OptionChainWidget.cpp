@@ -1,5 +1,6 @@
 #include "OptionChainWidget.h"
 #include "../infra/AppSettings.h"
+#include "ChartContextMenu.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -161,6 +162,7 @@ QWidget* OptionChainWidget::buildSmileChart()
     m_smileView = new QChartView(m_smileChart, box);
     m_smileView->setRenderHint(QPainter::Antialiasing);
     m_smileView->setMinimumHeight(180);
+    ChartContextMenu::install(m_smileView, "option_chain_iv_smile");
     lay->addWidget(m_smileView);
     return box;
 }

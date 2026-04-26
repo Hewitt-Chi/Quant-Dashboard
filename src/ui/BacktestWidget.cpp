@@ -1,5 +1,6 @@
 #include "BacktestWidget.h"
 #include "../infra/AppSettings.h"
+#include "ChartContextMenu.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -262,6 +263,7 @@ QWidget* BacktestWidget::buildPnlChart()
     m_chartView = new QChartView(m_chart, box);
     m_chartView->setRenderHint(QPainter::Antialiasing);
     m_chartView->setMinimumHeight(220);
+    ChartContextMenu::install(m_chartView, "backtest_pnl");
     lay->addWidget(m_chartView);
     return box;
 }

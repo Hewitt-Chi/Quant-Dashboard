@@ -34,12 +34,16 @@ signals:
     void statusMessage(const QString& msg);
     // 設定儲存後通知 MainWindow 重新套用（例如重啟輪詢）
     void settingsChanged();
+    void themeChanged(bool dark);      // 通知 MainWindow 切換主題
 
 private slots:
     void onSave();
     void onReset();
     void onProviderChanged(int index);
     void onBrowseDb();
+    void onThemeToggled(bool dark);
+    void onAddWatchSymbol();
+    void onRemoveWatchSymbol();
 
 private:
     void loadFromSettings();
@@ -57,6 +61,13 @@ private:
     // ── Database ──────────────────────────────────────────────────────────────
     QLineEdit*  m_dbPath      = nullptr;
     QLabel*     m_dbSizeLabel = nullptr;
+
+    // ── Watchlist ─────────────────────────────────────────────────────────────
+    class QListWidget* m_watchSymList = nullptr;
+    class QLineEdit*   m_watchSymInput= nullptr;
+
+    // ── Theme ─────────────────────────────────────────────────────────────────
+    class QCheckBox*   m_darkModeChk  = nullptr;
 
     // ── Buttons ───────────────────────────────────────────────────────────────
     QPushButton* m_saveBtn  = nullptr;

@@ -148,17 +148,17 @@ void QuantMainDlg::setupUi()
     addGroup(" SYSTEM");
     addPage(" Settings", 6);*/
     
-    addGroup("  ANALYSIS");
-    addPage(" Watchlist", 0);
-    addPage("  Option pricer", 1);
-    addPage("  Yield curve", 3);
-    addPage("  Option chain", 4);
-    addPage("  Monte Carlo", 5);  // ¡ö ½T»{¦³³o¦æ
-    addGroup("  STRATEGY");
-    addPage("  Backtest", 2);
-    addGroup("  SYSTEM");
-    addPage("  Vol surface", 6);  // ¡ö index §ï¦¨ 6
-    addPage("  Settings", 7);  // ¡ö index §ï¦¨ 7
+    addGroup("ANALYSIS");
+    addPage("   Watchlist", 0);
+    addPage("   Option pricer", 1);
+    addPage("   Yield curve", 3);
+    addPage("   Option chain", 4);
+    addPage("   Monte Carlo", 5);  // ¡ö ½T»{¦³³o¦æ
+    addGroup("STRATEGY");
+    addPage("   Backtest", 2);
+    addGroup("SYSTEM");
+    addPage("   Vol surface", 6);  // ¡ö index §ï¦¨ 6
+    addPage("   Settings", 7);  // ¡ö index §ï¦¨ 7
 
     auto* stack = new QStackedWidget(this);
     m_watchlist = new WatchlistWidget(m_fetcher, m_db, this);
@@ -206,6 +206,27 @@ void QuantMainDlg::setupUi()
             this, [this](const QString& m){ statusBar()->showMessage(m); });
     connect(m_settings,  &SettingsWidget::settingsChanged,
             this, &QuantMainDlg::onSettingsChanged);
+ connect(m_settings,  &SettingsWidget::themeChanged,
+            this, [](bool dark) {
+        // å¥—ç”¨ Fusion èª¿è‰²?
+        QPalette pal = dark
+            ? QApplication::style()->standardPalette()
+            : QPalette();
+        if (dark) {
+            pal.setColor(QPalette::Window,          QColor(28,28,28));
+            pal.setColor(QPalette::WindowText,       QColor(210,210,210));
+            pal.setColor(QPalette::Base,             QColor(18,18,18));
+            pal.setColor(QPalette::AlternateBase,    QColor(35,35,35));
+            pal.setColor(QPalette::Text,             QColor(210,210,210));
+            pal.setColor(QPalette::Button,           QColor(38,38,38));
+            pal.setColor(QPalette::ButtonText,       QColor(210,210,210));
+            pal.setColor(QPalette::Highlight,        QColor(37,99,235));
+            pal.setColor(QPalette::HighlightedText,  Qt::white);
+            pal.setColor(QPalette::Mid,              QColor(70,70,70));
+            pal.setColor(QPalette::Midlight,         QColor(55,55,55));
+        }
+        qApp->setPalette(pal);
+    });
 
     // ?è¨­??Watchlist
     nav->setCurrentItem(nav->item(1));

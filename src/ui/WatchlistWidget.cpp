@@ -13,6 +13,12 @@
 #include <QHeaderView>
 #include <QTimer>
 #include <QScrollArea>
+#include <QDialog>
+#include <QFormLayout>
+#include <QDialogButtonBox>
+#include <QDoubleSpinBox>
+#include <QMenu>
+#include <QTimer>
 #include <QSplitter>
 #include <QDateTime>
 
@@ -95,9 +101,44 @@ QuoteCard::QuoteCard(const QString& symbol, QWidget* parent)
     root->addWidget(m_view, 1, Qt::AlignRight | Qt::AlignVCenter);
 }
 
+void QuoteCard::setAlertLevels(double upper, double lower)
+{
+    m_alertUpper = upper;
+    m_alertLower = lower;
+    m_alertFired = false;
+
+    // 在 symLabel 旁邊顯示小鈴鐺圖示
+    bool hasAlert = (upper > 0 || lower > 0);
+    QString alertStr = hasAlert ? " 🔔" : "";
+    m_symLabel->setText(m_symbol + alertStr);
+}
+
+void QuoteCard::clearAlerts()
+{
+    m_alertUpper = m_alertLower = 0.0;
+    m_alertFired = false;
+    m_symLabel->setText(m_symbol);
+}
+
 void QuoteCard::updateQuote(const Quote& q)
 {
     m_priceLabel->setText(QString::number(q.price, 'f', 2));
+
+    // 價格警示檢查
+    if (!m_alertFired) {
+        if (m_alertUpper > 0 && q.price >= m_alertUpper) {
+            m_alertFired = true;
+            // 卡片邊框閃紅
+            setStyleSheet("QuoteCard{background:rgba(239,68,68,0.15);"
+                          "border:2px solid #ef4444;border-radius:10px;}");
+            emit priceAlert(m_symbol, q.price, "above");
+        } else if (m_alertLower > 0 && q.price <= m_alertLower) {
+            m_alertFired = true;
+            setStyleSheet("QuoteCard{background:rgba(239,68,68,0.15);"
+                          "border:2px solid #ef4444;border-radius:10px;}");
+            emit priceAlert(m_symbol, q.price, "below");
+        }
+    }
 
     bool up = q.change >= 0;
     QString color = up ? "#22c55e" : "#ef4444";
@@ -232,6 +273,11 @@ void WatchlistWidget::buildUi()
         auto* card = new QuoteCard(sym, m_cardsContainer);
         m_cards[sym] = card;
         cardsLay->addWidget(card);
+        card->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(card, &QWidget::customContextMenuRequested, this,
+                [this, sym](const QPoint&) { onSetAlert(sym); });
+        connect(card, &QuoteCard::priceAlert,
+                this, &WatchlistWidget::onAlertTriggered);
     }
     cardsLay->addStretch();
 
@@ -309,6 +355,11 @@ void WatchlistWidget::onAddSymbol()
     m_cards[sym] = card;
     qobject_cast<QVBoxLayout*>(m_cardsContainer->layout())
         ->insertWidget(m_cards.size()-1, card);
+    card->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(card, &QWidget::customContextMenuRequested, this,
+            [this, sym](const QPoint&) { onSetAlert(sym); });
+    connect(card, &QuoteCard::priceAlert,
+            this, &WatchlistWidget::onAlertTriggered);
     m_symInput->clear();
 
     // 持久化到 AppSettings
@@ -367,4 +418,92 @@ void WatchlistWidget::refreshDbStats()
         set(2, latestStr);
         set(3, QString::number(m_db->dbSizeBytes()/1024) + " KB");
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 右鍵設定價格警示
+// ─────────────────────────────────────────────────────────────────────────────
+void WatchlistWidget::onSetAlert(const QString& symbol)
+{
+    auto* card = m_cards.value(symbol, nullptr);
+    if (!card) return;
+
+    auto* dlg = new QDialog(this);
+    dlg->setWindowTitle(QString("Price alert — %1").arg(symbol));
+    dlg->setMinimumWidth(300);
+
+    auto* form = new QFormLayout(dlg);
+
+    auto* upperSpin = new QDoubleSpinBox(dlg);
+    upperSpin->setRange(0, 999999); upperSpin->setValue(card->alertUpper());
+    upperSpin->setDecimals(2); upperSpin->setSpecialValueText("Disabled");
+    upperSpin->setSuffix("  (alert when price ≥ this)");
+    upperSpin->setMinimumWidth(200);
+    form->addRow("Upper alert:", upperSpin);
+
+    auto* lowerSpin = new QDoubleSpinBox(dlg);
+    lowerSpin->setRange(0, 999999); lowerSpin->setValue(card->alertLower());
+    lowerSpin->setDecimals(2); lowerSpin->setSpecialValueText("Disabled");
+    lowerSpin->setSuffix("  (alert when price ≤ this)");
+    lowerSpin->setMinimumWidth(200);
+    form->addRow("Lower alert:", lowerSpin);
+
+    auto* hint = new QLabel("Set to 0 to disable. Right-click card to change.", dlg);
+    hint->setStyleSheet("font-size:10px;color:gray;");
+    form->addRow("", hint);
+
+    auto* btns = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dlg);
+    auto* clearBtn = btns->addButton("Clear alerts", QDialogButtonBox::ResetRole);
+    form->addRow(btns);
+
+    connect(btns, &QDialogButtonBox::accepted, dlg, &QDialog::accept);
+    connect(btns, &QDialogButtonBox::rejected, dlg, &QDialog::reject);
+    connect(clearBtn, &QPushButton::clicked, [card, dlg]{
+        card->clearAlerts(); dlg->accept();
+    });
+
+    if (dlg->exec() == QDialog::Accepted) {
+        double upper = upperSpin->value();
+        double lower = lowerSpin->value();
+        card->setAlertLevels(upper, lower);
+
+        QString msg;
+        if (upper > 0 && lower > 0)
+            msg = QString("%1 alert set: above %2, below %3")
+                  .arg(symbol).arg(upper,'f').arg(lower,'f');
+        else if (upper > 0)
+            msg = QString("%1 alert set: above %2").arg(symbol).arg(upper,'f');
+        else if (lower > 0)
+            msg = QString("%1 alert set: below %2").arg(symbol).arg(lower,'f');
+        else
+            msg = QString("%1 alerts cleared").arg(symbol);
+        emit statusMessage(msg);
+    }
+    dlg->deleteLater();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 警示觸發：status bar 閃紅三次
+// ─────────────────────────────────────────────────────────────────────────────
+void WatchlistWidget::onAlertTriggered(const QString& symbol,
+                                        double price,
+                                        const QString& dir)
+{
+    QString msg = QString("🔔 ALERT: %1 is %2 target — Price: %3")
+                  .arg(symbol)
+                  .arg(dir == "above" ? "ABOVE" : "BELOW")
+                  .arg(price, 0, 'f', 2);
+
+    emit statusMessage(msg);
+
+    // 閃爍 3 次（用 QTimer）
+    for (int i = 0; i < 3; ++i) {
+        QTimer::singleShot(i * 600, this, [this, msg, i]{
+            emit statusMessage(i % 2 == 0 ? msg : "");
+        });
+    }
+    QTimer::singleShot(1800, this, [this, msg]{
+        emit statusMessage(msg + "  [click to dismiss]");
+    });
 }

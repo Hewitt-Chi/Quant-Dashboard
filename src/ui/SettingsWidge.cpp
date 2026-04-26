@@ -15,7 +15,7 @@
 #include <QScrollArea>
 #include <QFrame>
 #include <QListWidget>
-#include <QListWidgetItem>
+#include <QCheckBox>
 
 // ─────────────────────────────────────────────────────────────────────────────
 SettingsWidget::SettingsWidget(QWidget* parent)
@@ -177,6 +177,57 @@ void SettingsWidget::buildUi()
         root->addWidget(box);
     }
 
+    // ── Watchlist default symbols ─────────────────────────────────────────────
+    {
+        auto* box  = new QGroupBox("Watchlist symbols", this);
+        auto* vlay = new QVBoxLayout(box);
+
+        auto* note = new QLabel(
+            "Symbols loaded on startup. Changes apply after restart.", box);
+        note->setStyleSheet("font-size:11px;color:rgba(150,150,150,0.7);");
+        vlay->addWidget(note);
+
+        m_watchSymList = new QListWidget(box);
+        m_watchSymList->setMaximumHeight(120);
+        m_watchSymList->setSelectionMode(QAbstractItemView::SingleSelection);
+        vlay->addWidget(m_watchSymList);
+
+        auto* inputRow = new QHBoxLayout;
+        m_watchSymInput = new QLineEdit(box);
+        m_watchSymInput->setPlaceholderText("Add symbol (e.g. NVDA)");
+        m_watchSymInput->setMaximumWidth(160);
+        auto* addBtn = new QPushButton("Add", box);
+        addBtn->setStyleSheet(
+            "QPushButton{background:#2563eb;color:white;border-radius:5px;padding:3px 10px;}"
+            "QPushButton:hover{background:#1d4ed8;}");
+        auto* removeBtn = new QPushButton("Remove selected", box);
+        removeBtn->setStyleSheet(
+            "QPushButton{border:0.5px solid palette(mid);border-radius:5px;padding:3px 10px;}"
+            "QPushButton:hover{background:palette(midlight);}");
+        connect(addBtn, &QPushButton::clicked, this, &SettingsWidget::onAddWatchSymbol);
+        connect(m_watchSymInput, &QLineEdit::returnPressed,
+                this, &SettingsWidget::onAddWatchSymbol);
+        connect(removeBtn, &QPushButton::clicked, this, &SettingsWidget::onRemoveWatchSymbol);
+        inputRow->addWidget(m_watchSymInput);
+        inputRow->addWidget(addBtn);
+        inputRow->addWidget(removeBtn);
+        inputRow->addStretch();
+        vlay->addLayout(inputRow);
+        root->addWidget(box);
+    }
+
+    // ── Theme ─────────────────────────────────────────────────────────────────
+    {
+        auto* box = new QGroupBox("Appearance", this);
+        auto* lay = new QHBoxLayout(box);
+        m_darkModeChk = new QCheckBox("Dark mode (requires restart for full effect)", box);
+        lay->addWidget(m_darkModeChk);
+        lay->addStretch();
+        connect(m_darkModeChk, &QCheckBox::toggled,
+                this, &SettingsWidget::onThemeToggled);
+        root->addWidget(box);
+    }
+
     // ── Save / Reset ──────────────────────────────────────────────────────────
     auto* btnRow = new QHBoxLayout;
     m_saveBtn = new QPushButton("Save settings", this);
@@ -215,6 +266,17 @@ void SettingsWidget::loadFromSettings()
     m_riskFree->setValue(cfg.riskFreeRate());
     m_defaultVol->setValue(cfg.defaultVolatility());
     m_dbPath->setText(cfg.dbPath());
+
+    // Watchlist symbols
+    if (m_watchSymList) {
+        m_watchSymList->clear();
+        for (const auto& sym : cfg.watchlist())
+            m_watchSymList->addItem(sym);
+    }
+
+    // Theme
+    if (m_darkModeChk)
+        m_darkModeChk->setChecked(cfg.darkMode());
 
     // DB size
     QFileInfo fi(cfg.dbPath());
@@ -274,27 +336,29 @@ void SettingsWidget::onBrowseDb()
     if (!path.isEmpty())
         m_dbPath->setText(path);
 }
-void SettingsWidget::onThemeToggled(bool dark)
-{
-    AppSettings::instance().setDarkMode(dark);
-    emit themeChanged(dark);
-    emit statusMessage(dark ? "Dark mode enabled." : "Light mode enabled.");
-}
 
+// =============================================================================
+// Watchlist symbol management
+// =============================================================================
 void SettingsWidget::onAddWatchSymbol()
 {
     if (!m_watchSymInput || !m_watchSymList) return;
     QString sym = m_watchSymInput->text().trimmed().toUpper();
     if (sym.isEmpty()) return;
+
+    // 檢查是否重複
     for (int i = 0; i < m_watchSymList->count(); ++i)
         if (m_watchSymList->item(i)->text() == sym) return;
+
     m_watchSymList->addItem(sym);
     m_watchSymInput->clear();
+
+    // 立即儲存
     QStringList syms;
     for (int i = 0; i < m_watchSymList->count(); ++i)
         syms << m_watchSymList->item(i)->text();
     AppSettings::instance().setWatchlist(syms);
-    emit statusMessage("Added " + sym + " to watchlist.");
+    emit statusMessage("Added " + sym + " to watchlist (restart to apply).");
 }
 
 void SettingsWidget::onRemoveWatchSymbol()
@@ -304,9 +368,20 @@ void SettingsWidget::onRemoveWatchSymbol()
     if (!item) return;
     QString sym = item->text();
     delete item;
+
     QStringList syms;
     for (int i = 0; i < m_watchSymList->count(); ++i)
         syms << m_watchSymList->item(i)->text();
     AppSettings::instance().setWatchlist(syms);
-    emit statusMessage("Removed " + sym + " from watchlist.");
+    emit statusMessage("Removed " + sym + " from watchlist (restart to apply).");
+}
+
+// =============================================================================
+// Theme toggle
+// =============================================================================
+void SettingsWidget::onThemeToggled(bool dark)
+{
+    AppSettings::instance().setDarkMode(dark);
+    emit themeChanged(dark);
+    emit statusMessage(dark ? "Dark mode enabled." : "Light mode enabled.");
 }

@@ -1,5 +1,6 @@
 #include "YieldCurveWidget.h"
 #include "../infra/AppSettings.h"
+#include "ChartContextMenu.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -132,24 +133,6 @@ QWidget* YieldCurveWidget::buildInputPanel()
         "QPushButton:disabled{color:palette(mid);}");
     topRow->addWidget(m_exportBtn);
     connect(m_exportBtn, &QPushButton::clicked, this, &YieldCurveWidget::onExportCsv);
-    // ── Fit Nelson-Siegel 按鈕 ────────────────────────────────────────────────
-        m_nsBtn = new QPushButton("Fit Nelson-Siegel", box);
-    m_nsBtn->setMinimumHeight(32);
-    m_nsBtn->setMinimumWidth(140);
-    m_nsBtn->setEnabled(false);   // Bootstrap 完成後才啟用
-    m_nsBtn->setStyleSheet(
-        "QPushButton{border:1px solid #7c3aed;color:#c4b5fd;"
-        "border-radius:6px;padding:0 10px;}"
-        "QPushButton:hover{background:#1e1b4b;}"
-        "QPushButton:disabled{color:palette(mid);border-color:palette(mid);}");
-    topRow->addWidget(m_nsBtn);
-    connect(m_nsBtn, &QPushButton::clicked,
-        this, &YieldCurveWidget::onFitNelsonSiegel);
-
-    m_nsParamLbl = new QLabel("", box);
-    m_nsParamLbl->setStyleSheet("font-size:10px;color:rgba(196,181,253,0.7);");
-    topRow->addWidget(m_nsParamLbl);
-    // ─────────────────────────────────────────────────────────────────────────
 
     m_calcBtn = new QPushButton("Bootstrap curve", box);
     m_calcBtn->setMinimumHeight(32); m_calcBtn->setMinimumWidth(140);
@@ -239,6 +222,7 @@ QWidget* YieldCurveWidget::buildSpotForwardTab()
     m_spotView = new QChartView(m_spotChart, w);
     m_spotView->setRenderHint(QPainter::Antialiasing);
     m_spotView->setMinimumHeight(240);
+    ChartContextMenu::install(m_spotView, "yield_curve_spot_forward");
     lay->addWidget(m_spotView, 1);
     return w;
 }
@@ -264,6 +248,7 @@ QWidget* YieldCurveWidget::buildDiscountTab()
     m_discView = new QChartView(m_discChart, w);
     m_discView->setRenderHint(QPainter::Antialiasing);
     m_discView->setMinimumHeight(240);
+    ChartContextMenu::install(m_discView, "yield_curve_discount");
     lay->addWidget(m_discView, 1);
     return w;
 }

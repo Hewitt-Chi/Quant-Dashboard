@@ -1,4 +1,5 @@
 #include "MonteCarloWidget.h"
+#include "ChartContextMenu.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGroupBox>
@@ -109,11 +110,11 @@ QWidget* MonteCarloWidget::buildPathChart()
 
     auto mkSeries = [&](const QString& name, const QString& hex,
         int width = 2, bool dash = false) -> QLineSeries* {
-            auto* s = new QLineSeries();
+            auto* s = new QLineSeries;
             s->setName(name);
-
-            QPen p;                           // 先預設建構
-            p.setColor(QColor(hex));          // 再設顏色
+            QColor color(hex);
+            QPen p;
+            p.setColor(color);
             p.setWidth(width);
             if (dash) p.setStyle(Qt::DashLine);
             s->setPen(p);
@@ -147,6 +148,7 @@ QWidget* MonteCarloWidget::buildPathChart()
     m_view = new QChartView(m_chart, box);
     m_view->setRenderHint(QPainter::Antialiasing);
     m_view->setMinimumHeight(250);
+    ChartContextMenu::install(m_view, "monte_carlo_paths");
 
     auto* hint = new QLabel(
         "Colored bands = 5/25/50/75/95th percentile of all simulated paths", box);
