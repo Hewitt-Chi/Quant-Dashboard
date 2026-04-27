@@ -11,11 +11,13 @@
 #include <QComboBox>
 #include <QLabel>
 #include <QPushButton>
-#include <QFileDialog>
-#include <QScrollArea>
-#include <QFrame>
+#include <QCheckBox>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QFrame>
+#include <QScrollArea>
 
 // ─────────────────────────────────────────────────────────────────────────────
 SettingsWidget::SettingsWidget(QWidget* parent)
@@ -28,26 +30,22 @@ SettingsWidget::SettingsWidget(QWidget* parent)
 // ─────────────────────────────────────────────────────────────────────────────
 void SettingsWidget::buildUi()
 {
-    auto* root = new QVBoxLayout(this);
+    // 外層：ScrollArea 讓內容可以捲動
+    auto* outerLayout = new QVBoxLayout(this);
+    outerLayout->setContentsMargins(0, 0, 0, 0);
+
+    auto* scrollArea = new QScrollArea(this);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+
+    auto* container = new QWidget;
+    auto* root = new QVBoxLayout(container);
     root->setContentsMargins(24, 16, 24, 16);
     root->setSpacing(16);
 
-    // 標題
-    auto* title = new QLabel("Settings", this);
+    auto* title = new QLabel("Settings", container);
     title->setStyleSheet("font-size:20px;font-weight:500;");
     root->addWidget(title);
-
-    // ── 輔助：建立分組 box ────────────────────────────────────────────────────
-    auto makeGroup = [this](const QString& title) -> QFormLayout* {
-        auto* box  = new QGroupBox(title, this);
-        auto* form = new QFormLayout(box);
-        form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        form->setHorizontalSpacing(16);
-        form->setVerticalSpacing(10);
-        form->setContentsMargins(16, 12, 16, 12);
-        // 把 box 加到 root 由呼叫端處理
-        return form;
-    };
 
     // ── 1. Quote provider ─────────────────────────────────────────────────────
     {
@@ -59,31 +57,27 @@ void SettingsWidget::buildUi()
 
         m_provider = new QComboBox(box);
         m_provider->addItem("Yahoo Finance (free, no key)", "yahoo");
-        m_provider->addItem("Polygon.io (requires API key)",  "polygon");
+        m_provider->addItem("Polygon.io (requires API key)", "polygon");
         form->addRow("Provider:", m_provider);
         connect(m_provider, &QComboBox::currentIndexChanged,
                 this, &SettingsWidget::onProviderChanged);
 
-        // API key row（含顯示/隱藏按鈕）
         auto* keyRow = new QHBoxLayout;
         m_apiKey = new QLineEdit(box);
-        m_apiKey->setPlaceholderText("Polygon API key (leave blank for Yahoo)");
+        m_apiKey->setPlaceholderText("Polygon API key");
         m_apiKey->setEchoMode(QLineEdit::Password);
         m_apiKey->setMinimumWidth(280);
-
         m_toggleKeyBtn = new QPushButton("Show", box);
         m_toggleKeyBtn->setFixedWidth(54);
         m_toggleKeyBtn->setStyleSheet(
-            "QPushButton{border:0.5px solid palette(mid);"
-            "border-radius:4px;padding:2px 6px;font-size:11px;}"
+            "QPushButton{border:0.5px solid palette(mid);border-radius:4px;"
+            "padding:2px 6px;font-size:11px;}"
             "QPushButton:hover{background:palette(midlight);}");
         connect(m_toggleKeyBtn, &QPushButton::clicked, [this]{
             m_keyVisible = !m_keyVisible;
-            m_apiKey->setEchoMode(m_keyVisible
-                ? QLineEdit::Normal : QLineEdit::Password);
+            m_apiKey->setEchoMode(m_keyVisible ? QLineEdit::Normal : QLineEdit::Password);
             m_toggleKeyBtn->setText(m_keyVisible ? "Hide" : "Show");
         });
-
         keyRow->addWidget(m_apiKey, 1);
         keyRow->addWidget(m_toggleKeyBtn);
         form->addRow("API key:", keyRow);
@@ -92,7 +86,6 @@ void SettingsWidget::buildUi()
             "Polygon free tier: 5 requests/min, sufficient for 60s polling.", box);
         note->setStyleSheet("font-size:11px;color:rgba(150,150,150,0.7);");
         form->addRow("", note);
-
         root->addWidget(box);
     }
 
@@ -108,13 +101,11 @@ void SettingsWidget::buildUi()
         m_refreshSec->setRange(10, 3600);
         m_refreshSec->setSuffix(" seconds");
         m_refreshSec->setMinimumWidth(140);
-
         auto* refreshRow = new QHBoxLayout;
         refreshRow->addWidget(m_refreshSec);
         refreshRow->addWidget(new QLabel("(restart app to apply)", box));
         refreshRow->addStretch();
         form->addRow("Quote refresh:", refreshRow);
-
         root->addWidget(box);
     }
 
@@ -140,12 +131,87 @@ void SettingsWidget::buildUi()
         m_defaultVol->setDecimals(3);
         m_defaultVol->setSuffix("  (e.g. 0.200 = 20%)");
         m_defaultVol->setMinimumWidth(200);
-        form->addRow("Default volatility σ:", m_defaultVol);
+        form->addRow("Default volatility:", m_defaultVol);
+        root->addWidget(box);
+    }
+
+    // ── 4. Watchlist symbols ─────────────────────────────────────────
+    {
+        auto* box = new QGroupBox("Watchlist symbols", this);
+        box->setMinimumHeight(220);
+        auto* vlay = new QVBoxLayout(box);
+        vlay->setContentsMargins(16, 12, 16, 12);
+        vlay->setSpacing(8);
+
+        auto* note = new QLabel(
+            "Symbols loaded on startup. Changes apply after restart.", box);
+        note->setStyleSheet("font-size:11px;color:rgba(150,150,150,0.7);");
+        vlay->addWidget(note);
+
+        m_watchSymList = new QListWidget(box);
+        m_watchSymList->setFixedHeight(100);
+        m_watchSymList->setSelectionMode(QAbstractItemView::SingleSelection);
+        m_watchSymList->setStyleSheet(
+            "QListWidget{border:1px solid palette(mid);border-radius:4px;"
+            "background:palette(base);}"
+            "QListWidget::item{padding:6px 10px;font-size:13px;}"
+            "QListWidget::item:selected{background:palette(highlight);"
+            "color:palette(highlighted-text);}");
+        vlay->addWidget(m_watchSymList);  // list 獨立一行
+
+        // 輸入列：另外建立，加到 vlay 而非 list
+        m_watchSymInput = new QLineEdit(box);
+        m_watchSymInput->setPlaceholderText("Add symbol (e.g. NVDA)");
+        m_watchSymInput->setMaximumWidth(160);
+
+        auto* addBtn = new QPushButton("Add", box);
+        addBtn->setStyleSheet(
+            "QPushButton{background:#2563eb;color:white;border-radius:5px;"
+            "padding:4px 12px;}QPushButton:hover{background:#1d4ed8;}");
+
+        auto* removeBtn = new QPushButton("Remove selected", box);
+        removeBtn->setStyleSheet(
+            "QPushButton{border:0.5px solid palette(mid);border-radius:5px;"
+            "padding:4px 12px;}QPushButton:hover{background:palette(midlight);}");
+
+        connect(addBtn, &QPushButton::clicked,
+            this, &SettingsWidget::onAddWatchSymbol);
+        connect(m_watchSymInput, &QLineEdit::returnPressed,
+            this, &SettingsWidget::onAddWatchSymbol);
+        connect(removeBtn, &QPushButton::clicked,
+            this, &SettingsWidget::onRemoveWatchSymbol);
+
+        auto* inputRow = new QHBoxLayout;
+        inputRow->addWidget(m_watchSymInput);
+        inputRow->addWidget(addBtn);
+        inputRow->addWidget(removeBtn);
+        inputRow->addStretch();
+        vlay->addLayout(inputRow);  // ← 輸入列加到 vlay，不是 list
 
         root->addWidget(box);
     }
 
-    // ── 4. Database ───────────────────────────────────────────────────────────
+    // ── 5. Appearance / Theme ─────────────────────────────────────────────────
+    {
+        auto* box = new QGroupBox("Appearance", this);
+        auto* lay = new QHBoxLayout(box);
+        lay->setContentsMargins(16,12,16,12);
+
+        m_darkModeChk = new QCheckBox("Dark mode", box);
+        m_darkModeChk->setStyleSheet("font-size:13px;");
+        auto* hint = new QLabel("(applies immediately)", box);
+        hint->setStyleSheet("font-size:11px;color:rgba(150,150,150,0.6);");
+
+        lay->addWidget(m_darkModeChk);
+        lay->addWidget(hint);
+        lay->addStretch();
+
+        connect(m_darkModeChk, &QCheckBox::toggled,
+                this, &SettingsWidget::onThemeToggled);
+        root->addWidget(box);
+    }
+
+    // ── 6. Database ───────────────────────────────────────────────────────────
     {
         auto* box  = new QGroupBox("Database", this);
         auto* form = new QFormLayout(box);
@@ -173,7 +239,6 @@ void SettingsWidget::buildUi()
             "Changes to DB path take effect after restart.", box);
         dbNote->setStyleSheet("font-size:11px;color:rgba(150,150,150,0.7);");
         form->addRow("", dbNote);
-
         root->addWidget(box);
     }
 
@@ -198,6 +263,12 @@ void SettingsWidget::buildUi()
     btnRow->addStretch();
     root->addLayout(btnRow);
     root->addStretch();
+
+    root->addStretch();
+
+    // 把 container 放進 scrollArea
+    scrollArea->setWidget(container);
+    outerLayout->addWidget(scrollArea);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -206,9 +277,9 @@ void SettingsWidget::loadFromSettings()
     auto& cfg = AppSettings::instance();
 
     // Provider
-    QString prov = cfg.quoteProvider();
-    m_provider->setCurrentIndex(prov == "polygon" ? 1 : 0);
-    onProviderChanged(m_provider->currentIndex());
+    int provIdx = cfg.quoteProvider() == "polygon" ? 1 : 0;
+    m_provider->setCurrentIndex(provIdx);
+    onProviderChanged(provIdx);
 
     m_apiKey->setText(cfg.apiKey());
     m_refreshSec->setValue(cfg.quoteRefreshSec());
@@ -216,33 +287,40 @@ void SettingsWidget::loadFromSettings()
     m_defaultVol->setValue(cfg.defaultVolatility());
     m_dbPath->setText(cfg.dbPath());
 
+    // Watchlist
+    if (m_watchSymList) {
+        m_watchSymList->clear();
+        for (const auto& sym : cfg.watchlist())
+            m_watchSymList->addItem(sym);
+    }
+
+    // Theme
+    if (m_darkModeChk)
+        m_darkModeChk->setChecked(cfg.darkMode());
+
     // DB size
     QFileInfo fi(cfg.dbPath());
-    if (fi.exists()) {
-        double kb = fi.size() / 1024.0;
-        m_dbSizeLabel->setText(QString("%1 KB").arg(kb, 0,'f',1));
-    } else {
+    if (fi.exists())
+        m_dbSizeLabel->setText(
+            QString("%1 KB").arg(fi.size() / 1024.0, 0, 'f', 1));
+    else
         m_dbSizeLabel->setText("File not found");
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 void SettingsWidget::onSave()
 {
     auto& cfg = AppSettings::instance();
-
     cfg.setQuoteProvider(m_provider->currentData().toString());
     cfg.setApiKey(m_apiKey->text().trimmed());
     cfg.setQuoteRefreshSec(m_refreshSec->value());
     cfg.setRiskFreeRate(m_riskFree->value());
     cfg.setDefaultVolatility(m_defaultVol->value());
     cfg.setDbPath(m_dbPath->text().trimmed());
-
     emit settingsChanged();
     emit statusMessage("Settings saved.");
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 void SettingsWidget::onReset()
 {
     AppSettings::instance().reset();
@@ -250,30 +328,24 @@ void SettingsWidget::onReset()
     emit statusMessage("Settings reset to defaults.");
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 void SettingsWidget::onProviderChanged(int index)
 {
     bool isPolygon = (index == 1);
     m_apiKey->setEnabled(isPolygon);
     m_toggleKeyBtn->setEnabled(isPolygon);
-    if (!isPolygon) {
-        m_apiKey->setStyleSheet("color:palette(mid);");
-    } else {
-        m_apiKey->setStyleSheet("");
-    }
+    m_apiKey->setStyleSheet(isPolygon ? "" : "color:palette(mid);");
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 void SettingsWidget::onBrowseDb()
 {
     QString path = QFileDialog::getSaveFileName(
-        this,
-        "Select database file",
-        m_dbPath->text(),
+        this, "Select database file", m_dbPath->text(),
         "SQLite database (*.db);;All files (*)");
     if (!path.isEmpty())
         m_dbPath->setText(path);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
 void SettingsWidget::onThemeToggled(bool dark)
 {
     AppSettings::instance().setDarkMode(dark);
@@ -294,13 +366,13 @@ void SettingsWidget::onAddWatchSymbol()
     for (int i = 0; i < m_watchSymList->count(); ++i)
         syms << m_watchSymList->item(i)->text();
     AppSettings::instance().setWatchlist(syms);
-    emit statusMessage("Added " + sym + " to watchlist.");
+    emit statusMessage("Added " + sym + " to watchlist (restart to apply).");
 }
 
 void SettingsWidget::onRemoveWatchSymbol()
 {
     if (!m_watchSymList) return;
-    auto* item = m_watchSymList->currentItem();
+    QListWidgetItem* item = m_watchSymList->currentItem();
     if (!item) return;
     QString sym = item->text();
     delete item;
@@ -308,5 +380,5 @@ void SettingsWidget::onRemoveWatchSymbol()
     for (int i = 0; i < m_watchSymList->count(); ++i)
         syms << m_watchSymList->item(i)->text();
     AppSettings::instance().setWatchlist(syms);
-    emit statusMessage("Removed " + sym + " from watchlist.");
+    emit statusMessage("Removed " + sym + " from watchlist (restart to apply).");
 }
