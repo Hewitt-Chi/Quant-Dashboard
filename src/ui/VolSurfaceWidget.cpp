@@ -29,7 +29,8 @@ VolSurfaceWidget::VolSurfaceWidget(AsyncWorker* worker, QWidget* parent)
 VolSurfaceWidget::~VolSurfaceWidget()
 {
     // Q3DSurface 需要手動刪除 container
-    delete m_surface;
+    if (m_surface)
+        delete m_surface;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
